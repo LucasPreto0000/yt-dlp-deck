@@ -1,0 +1,1053 @@
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { AnimatePresence, motion } from "framer-motion";
+import {
+  Activity,
+  AlertCircle,
+  ArrowLeft,
+  ArrowRight,
+  AudioLines,
+  Check,
+  CheckCircle2,
+  Chrome,
+  Clipboard,
+  Clock3,
+  Compass,
+  Cookie,
+  Disc3,
+  Download,
+  FileAudio,
+  FileText,
+  Film,
+  Flame,
+  FolderOpen,
+  Gauge,
+  Globe2,
+  HardDriveDownload,
+  Instagram,
+  Link2,
+  ListVideo,
+  LoaderCircle,
+  LucideIcon,
+  MessageCircle,
+  MonitorPlay,
+  Music2,
+  Play,
+  Radio,
+  RotateCcw,
+  Search,
+  Settings2,
+  ShieldCheck,
+  SlidersHorizontal,
+  Sparkles,
+  SquareTerminal,
+  Twitter,
+  UserRound,
+  Video,
+  WandSparkles,
+  Youtube,
+} from "lucide-react";
+import type {
+  CookieId,
+  DownloadRequest,
+  DownloadResult,
+  FormatId,
+  QualityId,
+  SearchResult,
+  SourceMode,
+  ToolStatus,
+} from "./types";
+import { startGpuBackdrop, type BackdropController } from "./visuals/gpuBackdrop";
+
+const transition = { type: "spring" as const, stiffness: 320, damping: 30 };
+
+const steps: Array<{ title: string; subtitle: string; icon: LucideIcon }> = [
+  { title: "Plataforma", subtitle: "Organize o destino", icon: Globe2 },
+  { title: "Conteúdo", subtitle: "Link ou pesquisa", icon: Search },
+  { title: "Formato", subtitle: "Vídeo ou áudio", icon: Film },
+  { title: "Ajustes", subtitle: "Qualidade e acesso", icon: SlidersHorizontal },
+  { title: "Finalizar", subtitle: "Revise e baixe", icon: Download },
+];
+
+const platforms: Array<{
+  id: string;
+  label: string;
+  description: string;
+  icon: LucideIcon;
+  color: string;
+}> = [
+  { id: "YouTube", label: "YouTube", description: "Vídeos, Shorts e lives", icon: Youtube, color: "#ff4164" },
+  { id: "TikTok", label: "TikTok", description: "Vídeos e tendências", icon: Music2, color: "#46edf2" },
+  { id: "Instagram", label: "Instagram", description: "Reels e publicações", icon: Instagram, color: "#f765a3" },
+  { id: "X_Twitter", label: "X / Twitter", description: "Vídeos e clipes", icon: Twitter, color: "#60baff" },
+  { id: "Twitch", label: "Twitch", description: "Clipes e transmissões", icon: Radio, color: "#a978ff" },
+  { id: "Reddit", label: "Reddit", description: "Mídias de comunidades", icon: MessageCircle, color: "#ff7045" },
+  { id: "Outro", label: "Outro site", description: "Qualquer site compatível", icon: Globe2, color: "#aab2d1" },
+];
+
+const formats: Array<{
+  id: FormatId;
+  label: string;
+  description: string;
+  category: "Vídeo" | "Áudio";
+  icon: LucideIcon;
+  color: string;
+}> = [
+  { id: "mp4", label: "MP4", description: "Compatibilidade máxima", category: "Vídeo", icon: Video, color: "#62a8ff" },
+  { id: "mkv", label: "MKV", description: "Todos os codecs", category: "Vídeo", icon: Disc3, color: "#a97aff" },
+  { id: "webm", label: "WEBM", description: "Formato web moderno", category: "Vídeo", icon: Globe2, color: "#43d9ff" },
+  { id: "best", label: "Melhor", description: "Qualidade sem limites", category: "Vídeo", icon: Sparkles, color: "#ffbd58" },
+  { id: "mp3", label: "MP3", description: "Universal e compacto", category: "Áudio", icon: Music2, color: "#ff6e9a" },
+  { id: "flac", label: "FLAC", description: "Áudio sem perdas", category: "Áudio", icon: AudioLines, color: "#44dda8" },
+  { id: "wav", label: "WAV", description: "Sem compressão", category: "Áudio", icon: FileAudio, color: "#dfe8ff" },
+  { id: "m4a", label: "M4A", description: "Eficiente e moderno", category: "Áudio", icon: FileAudio, color: "#9d9cff" },
+];
+
+const qualities: Array<{ id: QualityId; label: string; detail: string }> = [
+  { id: "best", label: "Melhor disponível", detail: "Sem limite" },
+  { id: "2160p60", label: "4K · 60 FPS", detail: "2160p" },
+  { id: "1440p60", label: "2K · 60 FPS", detail: "1440p" },
+  { id: "1080p60", label: "Full HD · 60 FPS", detail: "1080p" },
+  { id: "1080p", label: "Full HD", detail: "1080p" },
+  { id: "720p", label: "HD", detail: "720p" },
+  { id: "480p", label: "Compacto", detail: "480p" },
+];
+
+const cookieOptions: Array<{
+  id: CookieId;
+  label: string;
+  detail: string;
+  icon: LucideIcon;
+}> = [
+  { id: "none", label: "Sem cookies", detail: "Conteúdo público", icon: ShieldCheck },
+  { id: "chrome", label: "Chrome", detail: "Sessão do navegador", icon: Chrome },
+  { id: "edge", label: "Edge", detail: "Sessão do navegador", icon: Compass },
+  { id: "firefox", label: "Firefox", detail: "Sessão do navegador", icon: Flame },
+  { id: "file", label: "Arquivo", detail: "cookies.txt", icon: FileText },
+];
+
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+const isAudio = (format: FormatId | null) =>
+  format === "mp3" || format === "flac" || format === "wav" || format === "m4a";
+
+function ToolBadge({
+  label,
+  ready,
+  version,
+}: {
+  label: string;
+  ready: boolean;
+  version?: string;
+}) {
+  return (
+    <div className={`tool-badge ${ready ? "is-ready" : ""}`} title={version}>
+      <span className="tool-light" />
+      <span>{label}</span>
+      {ready && <Check size={12} />}
+    </div>
+  );
+}
+
+const ChoiceCard = memo(function ChoiceCard({
+  active,
+  icon: Icon,
+  color,
+  title,
+  description,
+  tag,
+  onClick,
+}: {
+  active: boolean;
+  icon: LucideIcon;
+  color: string;
+  title: string;
+  description: string;
+  tag?: string;
+  onClick: () => void;
+}) {
+  return (
+    <motion.button
+      type="button"
+      className={`choice-card ${active ? "is-active" : ""}`}
+      style={{ "--card-color": color } as React.CSSProperties}
+      onClick={onClick}
+      whileHover={{ y: -6 }}
+      whileTap={{ scale: 0.98 }}
+    >
+      <span className="choice-glow" />
+      <span className="choice-icon">
+        <Icon size={24} />
+      </span>
+      {tag && <span className="choice-tag">{tag}</span>}
+      <span className="choice-copy">
+        <strong>{title}</strong>
+        <small>{description}</small>
+      </span>
+      <motion.span
+        className="choice-check"
+        initial={false}
+        animate={{ scale: active ? 1 : 0, opacity: active ? 1 : 0 }}
+        transition={transition}
+      >
+        <Check size={14} />
+      </motion.span>
+    </motion.button>
+  );
+});
+
+const MediaCard = memo(function MediaCard({
+  media,
+  selected,
+  onClick,
+  large = false,
+}: {
+  media: SearchResult;
+  selected: boolean;
+  onClick?: () => void;
+  large?: boolean;
+}) {
+  const uploader = "Resultado da pesquisa";
+  return (
+    <motion.button
+      type="button"
+      className={`media-card ${selected ? "is-selected" : ""} ${large ? "is-large" : ""}`}
+      onClick={onClick}
+      whileHover={onClick ? { y: -6 } : undefined}
+      whileTap={onClick ? { scale: 0.985 } : undefined}
+    >
+      <div className="media-cover">
+        {media.thumbnail ? (
+          <img
+            src={media.thumbnail}
+            alt={`Capa de ${media.title}`}
+            loading="lazy"
+            decoding="async"
+          />
+        ) : (
+          <div className="cover-fallback">
+            <Film size={34} />
+          </div>
+        )}
+        <div className="cover-shade" />
+        <span className="duration-badge">
+          <Clock3 size={12} /> {media.duration || "—"}
+        </span>
+        <span className="play-orbit">
+          <Play size={18} fill="currentColor" />
+        </span>
+      </div>
+      <div className="media-content">
+        <div className="media-title">{media.title}</div>
+        <div className="media-meta">
+          <UserRound size={12} />
+          <span>{uploader}</span>
+        </div>
+      </div>
+      <AnimatePresence>
+        {selected && (
+          <motion.span
+            className="selected-chip"
+            initial={{ opacity: 0, scale: 0.7, y: -6 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.7 }}
+          >
+            <CheckCircle2 size={14} /> Selecionado
+          </motion.span>
+        )}
+      </AnimatePresence>
+    </motion.button>
+  );
+});
+
+function App() {
+  const [step, setStep] = useState(0);
+  const [platform, setPlatform] = useState<string | null>(null);
+  const [platformFolder, setPlatformFolder] = useState("");
+  const [sourceMode, setSourceMode] = useState<SourceMode>("url");
+  const [url, setUrl] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState("");
+  const [results, setResults] = useState<SearchResult[]>([]);
+  const [selectedResult, setSelectedResult] = useState<number | null>(null);
+  const [format, setFormat] = useState<FormatId | null>(null);
+  const [quality, setQuality] = useState<QualityId>("best");
+  const [cookies, setCookies] = useState<CookieId>("none");
+  const [cookieFile, setCookieFile] = useState("");
+  const [tools, setTools] = useState<ToolStatus | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadPercent, setDownloadPercent] = useState(0);
+  const [downloadLines, setDownloadLines] = useState<string[]>([]);
+  const [downloadMessage, setDownloadMessage] = useState("");
+  const [downloadError, setDownloadError] = useState("");
+  const consoleRef = useRef<HTMLPreElement>(null);
+  const downloadBufferRef = useRef<string[]>([]);
+  const downloadPercentRef = useRef(0);
+  const downloadFlushRef = useRef<number | null>(null);
+  const gpuCanvasRef = useRef<HTMLCanvasElement>(null);
+  const gpuControllerRef = useRef<BackdropController | null>(null);
+  const [gpuRenderer, setGpuRenderer] = useState("GPU iniciando");
+
+  const selectedFormat = formats.find((item) => item.id === format);
+  const selectedQuality = qualities.find((item) => item.id === quality);
+  const selectedCookie = cookieOptions.find((item) => item.id === cookies);
+  const progress = (step / (steps.length - 1)) * 100;
+
+  const validStep = useMemo(() => {
+    if (step === 0) return Boolean(platformFolder.trim());
+    if (step === 1) return Boolean(url.trim());
+    if (step === 2) return Boolean(format);
+    if (step === 3) return cookies !== "file" || Boolean(cookieFile.trim());
+    return true;
+  }, [step, platformFolder, url, format, cookies, cookieFile]);
+
+  useEffect(() => {
+    let active = true;
+    const unlisteners: Array<() => void> = [];
+    void checkTools();
+    void (async () => {
+      unlisteners.push(
+        await listen<string>("download-output", ({ payload }) => {
+          if (!active) return;
+          const line = String(payload || "");
+          downloadBufferRef.current.push(line);
+          if (downloadBufferRef.current.length > 300) {
+            downloadBufferRef.current = downloadBufferRef.current.slice(-300);
+          }
+          const match = line.match(/\[download\]\s+([0-9.]+)%/);
+          if (match) downloadPercentRef.current = Math.min(100, Number(match[1]));
+          if (downloadFlushRef.current === null) {
+            downloadFlushRef.current = window.setTimeout(() => {
+              setDownloadLines([...downloadBufferRef.current]);
+              setDownloadPercent(downloadPercentRef.current);
+              downloadFlushRef.current = null;
+            }, 80);
+          }
+        }),
+      );
+    })();
+    return () => {
+      active = false;
+      if (downloadFlushRef.current !== null) window.clearTimeout(downloadFlushRef.current);
+      unlisteners.forEach((unlisten) => unlisten());
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    if (gpuCanvasRef.current) {
+      void startGpuBackdrop(gpuCanvasRef.current)
+        .then((controller) => {
+          if (!active) {
+            controller.destroy();
+            return;
+          }
+          gpuControllerRef.current = controller;
+          setGpuRenderer(controller.renderer === "webgpu-wgsl" ? "WASM · WebGPU · WGSL" : "WASM · WebGL2 · GLSL");
+        })
+        .catch(() => setGpuRenderer("GPU fallback CSS"));
+    }
+    return () => {
+      active = false;
+      gpuControllerRef.current?.destroy();
+      gpuControllerRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const normalized = Math.max(step / (steps.length - 1), downloadPercent / 100);
+    gpuControllerRef.current?.setProgress(normalized);
+  }, [step, downloadPercent]);
+
+  useEffect(() => {
+    if (consoleRef.current) consoleRef.current.scrollTop = consoleRef.current.scrollHeight;
+  }, [downloadLines]);
+
+  async function checkTools() {
+    try {
+      const status = await invoke<ToolStatus>("get_tool_status");
+      setTools(status);
+    } catch {
+      setTools(null);
+    }
+  }
+
+  function choosePlatform(id: string) {
+    setPlatform(id);
+    setPlatformFolder(id === "Outro" ? "" : id);
+  }
+
+  async function pasteUrl() {
+    try {
+      const value = await navigator.clipboard.readText();
+      if (value) {
+        setUrl(value.trim());
+      }
+    } catch (error) {
+      setSearchError(`Não foi possível acessar a área de transferência: ${errorText(error)}`);
+    }
+  }
+
+  async function searchVideos() {
+    if (!searchQuery.trim()) return;
+    setSearching(true);
+    setSearchError("");
+    setResults([]);
+    setSelectedResult(null);
+    try {
+      const items = await invoke<SearchResult[]>("search_videos", { query: searchQuery.trim() });
+      setResults(items);
+    } catch (error) {
+      setSearchError(errorText(error));
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  function chooseResult(item: SearchResult, index: number) {
+    setSelectedResult(index);
+    setUrl(item.url);
+  }
+
+  async function startDownload() {
+    if (!format || downloading) return;
+    setDownloading(true);
+    setDownloadPercent(0);
+    setDownloadLines([]);
+    downloadBufferRef.current = [];
+    downloadPercentRef.current = 0;
+    setDownloadMessage("");
+    setDownloadError("");
+    const request: DownloadRequest = {
+      url: url.trim(),
+      platformFolder: platformFolder.trim(),
+      format,
+      quality,
+      cookies,
+      cookieFile: cookieFile.trim() || null,
+    };
+    try {
+      const result = await invoke<DownloadResult>("start_download", { request });
+      setDownloadPercent(100);
+      downloadPercentRef.current = 100;
+      setDownloadMessage(`${result.message} Arquivos salvos em ${result.outputDir}`);
+    } catch (error) {
+      const message = errorText(error);
+      setDownloadError(message);
+      setDownloadLines((current) => [...current, `ERRO: ${message}`]);
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  async function openFolder() {
+    try {
+      await invoke("open_downloads_folder", { platformFolder: platformFolder || null });
+    } catch (error) {
+      setDownloadError(errorText(error));
+    }
+  }
+
+  function goNext() {
+    if (validStep) setStep((current) => Math.min(steps.length - 1, current + 1));
+  }
+
+  function commandPreview() {
+    if (!format) return "";
+    const parts = [
+      "yt-dlp",
+      `"${url}"`,
+      `-o "Downloads\\YT-DLP Deck\\${platformFolder}\\%(uploader)s - %(title)s [%(id)s].%(ext)s"`,
+      "--no-playlist",
+      "--add-metadata",
+      "--concurrent-fragments 4",
+    ];
+    if (cookies === "file" && cookieFile) parts.push(`--cookies "${cookieFile}"`);
+    else if (cookies !== "none") parts.push(`--cookies-from-browser ${cookies}`);
+    if (isAudio(format)) parts.push(`-x --audio-format ${format} --audio-quality 0`);
+    else parts.push(`-f "${quality}" --merge-output-format ${format === "best" ? "mkv" : format}`);
+    return parts.join(" \\\n  ");
+  }
+
+  const pageMotion = {
+    initial: { opacity: 0, y: 24 },
+    animate: { opacity: 1, y: 0 },
+    exit: { opacity: 0, y: -16 },
+    transition,
+  };
+
+  function renderPlatform() {
+    return (
+      <>
+        <PageHeader
+          eyebrow="Passo 01 · organização"
+          title={<>Primeiro, escolha o seu <em>destino.</em></>}
+          description="Cada plataforma recebe uma pasta própria. Assim sua biblioteca continua organizada mesmo depois de centenas de downloads."
+          icon={Globe2}
+        />
+        <div className="card-grid platform-grid">
+          {platforms.map((item) => (
+            <ChoiceCard
+              key={item.id}
+              active={platform === item.id}
+              icon={item.icon}
+              color={item.color}
+              title={item.label}
+              description={item.description}
+              onClick={() => choosePlatform(item.id)}
+            />
+          ))}
+        </div>
+        <AnimatePresence>
+          {platform === "Outro" && (
+            <motion.div
+              className="field-panel custom-folder"
+              initial={{ opacity: 0, height: 0, y: -10 }}
+              animate={{ opacity: 1, height: "auto", y: 0 }}
+              exit={{ opacity: 0, height: 0 }}
+            >
+              <label>
+                <FolderOpen size={15} /> Nome da pasta
+              </label>
+              <input
+                value={platformFolder}
+                onChange={(event) => setPlatformFolder(event.target.value)}
+                placeholder="Ex.: Vimeo, Dailymotion ou Cursos"
+                autoFocus
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </>
+    );
+  }
+
+  function renderSource() {
+    return (
+      <>
+        <PageHeader
+          eyebrow="Passo 02 · conteúdo"
+          title={<>Encontre exatamente o que você <em>quer baixar.</em></>}
+          description="Cole um link direto ou pesquise pelo nome. Na pesquisa, cada resultado aparece com sua capa para você escolher com segurança."
+          icon={WandSparkles}
+        />
+        <div className="source-tabs">
+          <button
+            className={sourceMode === "url" ? "is-active" : ""}
+            onClick={() => setSourceMode("url")}
+          >
+            <Link2 size={16} /> Link direto
+          </button>
+          <button
+            className={sourceMode === "search" ? "is-active" : ""}
+            onClick={() => setSourceMode("search")}
+          >
+            <Search size={16} /> Pesquisar vídeo
+          </button>
+          <motion.span
+            className="tab-indicator"
+            animate={{ x: sourceMode === "url" ? 0 : "100%" }}
+            transition={transition}
+          />
+        </div>
+        <AnimatePresence mode="wait">
+          {sourceMode === "url" ? (
+            <motion.div key="url" {...pageMotion} className="source-area">
+              <div className="field-panel hero-input">
+                <label>
+                  <Link2 size={15} /> URL da mídia
+                </label>
+                <div className="input-actions">
+                  <input
+                    value={url}
+                    onChange={(event) => setUrl(event.target.value)}
+                    onKeyDown={(event) => event.key === "Enter" && url.trim() && goNext()}
+                    placeholder="https://youtube.com/watch?v=..."
+                  />
+                  <button className="soft-button" onClick={pasteUrl} title="Colar URL">
+                    <Clipboard size={17} /> Colar
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          ) : (
+            <motion.div key="search" {...pageMotion} className="source-area">
+              <div className="field-panel hero-input">
+                <label>
+                  <Search size={15} /> Pesquisa inteligente
+                </label>
+                <div className="input-actions">
+                  <input
+                    value={searchQuery}
+                    onChange={(event) => setSearchQuery(event.target.value)}
+                    onKeyDown={(event) => event.key === "Enter" && void searchVideos()}
+                    placeholder="Música, tutorial, podcast, artista..."
+                  />
+                  <button
+                    className="primary-button"
+                    onClick={searchVideos}
+                    disabled={!searchQuery.trim() || searching}
+                  >
+                    {searching ? <LoaderCircle className="spin" size={18} /> : <Search size={18} />}
+                    {searching ? "Buscando" : "Buscar"}
+                  </button>
+                </div>
+              </div>
+              {searchError && <InlineError message={searchError} />}
+              {searching && (
+                <div className="skeleton-grid">
+                  {[0, 1, 2].map((item) => (
+                    <div className="media-skeleton" key={item}>
+                      <span />
+                      <i />
+                      <i />
+                    </div>
+                  ))}
+                </div>
+              )}
+              {!searching && !results.length && !searchError && (
+                <div className="empty-state">
+                  <span className="empty-orbit">
+                    <Search size={26} />
+                  </span>
+                  <strong>As capas aparecerão aqui</strong>
+                  <small>Mostraremos até cinco resultados para você comparar.</small>
+                </div>
+              )}
+              <motion.div className="media-grid">
+                {results.map((item, index) => (
+                  <MediaCard
+                    key={`${item.id}-${index}`}
+                    media={item}
+                    selected={selectedResult === index}
+                    onClick={() => chooseResult(item, index)}
+                  />
+                ))}
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </>
+    );
+  }
+
+  function renderFormats() {
+    return (
+      <>
+        <PageHeader
+          eyebrow="Passo 03 · formato"
+          title={<>Escolha como a mídia deve <em>chegar até você.</em></>}
+          description="Vídeo completo ou somente áudio. O FFmpeg cuida da conversão e da melhor combinação de faixas."
+          icon={Film}
+        />
+        <div className="format-sections">
+          {(["Vídeo", "Áudio"] as const).map((category) => (
+            <section key={category}>
+              <div className="section-label">
+                {category === "Vídeo" ? <MonitorPlay size={15} /> : <AudioLines size={15} />}
+                {category}
+              </div>
+              <div className="card-grid format-grid">
+                {formats
+                  .filter((item) => item.category === category)
+                  .map((item) => (
+                    <ChoiceCard
+                      key={item.id}
+                      active={format === item.id}
+                      icon={item.icon}
+                      color={item.color}
+                      title={item.label}
+                      description={item.description}
+                      tag={item.category}
+                      onClick={() => setFormat(item.id)}
+                    />
+                  ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      </>
+    );
+  }
+
+  function renderSettings() {
+    const audio = format ? isAudio(format) : false;
+    return (
+      <>
+        <PageHeader
+          eyebrow="Passo 04 · controle"
+          title={<>Ajuste qualidade e <em>acesso.</em></>}
+          description="Escolha a resolução desejada. Para conteúdo restrito, use uma sessão do navegador ou um arquivo cookies.txt."
+          icon={Settings2}
+        />
+        <div className="settings-layout">
+          <section className={`settings-panel ${audio ? "is-disabled" : ""}`}>
+            <div className="panel-heading">
+              <span>
+                <Gauge size={19} />
+              </span>
+              <div>
+                <strong>Qualidade do vídeo</strong>
+                <small>{audio ? "Não se aplica ao formato de áudio" : "Com fallback automático"}</small>
+              </div>
+            </div>
+            {audio ? (
+              <div className="audio-quality-message">
+                <AudioLines size={28} />
+                <strong>Qualidade máxima de áudio</strong>
+                <small>A conversão usará a melhor faixa disponível.</small>
+              </div>
+            ) : (
+              <div className="quality-list">
+                {qualities.map((item) => (
+                  <button
+                    key={item.id}
+                    className={quality === item.id ? "is-active" : ""}
+                    onClick={() => setQuality(item.id)}
+                  >
+                    <span className="radio-dot" />
+                    <span>
+                      <strong>{item.label}</strong>
+                      <small>{item.detail}</small>
+                    </span>
+                    {quality === item.id && <Check size={15} />}
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
+          <section className="settings-panel">
+            <div className="panel-heading">
+              <span>
+                <Cookie size={19} />
+              </span>
+              <div>
+                <strong>Cookies e autenticação</strong>
+                <small>Para login, idade ou conteúdo privado</small>
+              </div>
+            </div>
+            <div className="cookie-grid">
+              {cookieOptions.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <button
+                    key={item.id}
+                    className={cookies === item.id ? "is-active" : ""}
+                    onClick={() => setCookies(item.id)}
+                  >
+                    <Icon size={18} />
+                    <span>
+                      <strong>{item.label}</strong>
+                      <small>{item.detail}</small>
+                    </span>
+                    {cookies === item.id && <CheckCircle2 size={16} />}
+                  </button>
+                );
+              })}
+            </div>
+            <AnimatePresence>
+              {cookies === "file" && (
+                <motion.div
+                  className="cookie-file"
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                >
+                  <label>
+                    <FileText size={14} /> Caminho do cookies.txt
+                  </label>
+                  <input
+                    value={cookieFile}
+                    onChange={(event) => setCookieFile(event.target.value)}
+                    placeholder="C:\caminho\cookies.txt"
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </section>
+        </div>
+      </>
+    );
+  }
+
+  function renderReview() {
+    const chosenMedia = selectedResult !== null ? results[selectedResult] : null;
+    return (
+      <>
+        <PageHeader
+          eyebrow="Passo 05 · download"
+          title={<>Seu download está <em>pronto para decolar.</em></>}
+          description="Revise tudo e acompanhe o progresso sem sair do aplicativo."
+          icon={HardDriveDownload}
+        />
+        <div className="review-grid">
+          <section className="review-panel">
+            {chosenMedia && <MediaCard media={chosenMedia} selected large />}
+            <div className="review-list">
+              <ReviewRow icon={FolderOpen} label="Destino" value={platformFolder} />
+              <ReviewRow
+                icon={Film}
+                label="Formato"
+                value={`${selectedFormat?.label || "—"} · ${
+                  isAudio(format) ? "Melhor faixa de áudio" : selectedQuality?.label || "—"
+                }`}
+              />
+              <ReviewRow icon={Cookie} label="Acesso" value={selectedCookie?.label || "—"} />
+              {!chosenMedia && <ReviewRow icon={Link2} label="URL" value={url} />}
+            </div>
+          </section>
+          <section className="terminal-panel">
+            <div className="terminal-head">
+              <span>
+                <i className="terminal-dot red" />
+                <i className="terminal-dot yellow" />
+                <i className="terminal-dot green" />
+              </span>
+              <span>
+                <SquareTerminal size={14} /> comando seguro
+              </span>
+            </div>
+            <pre>{commandPreview()}</pre>
+          </section>
+        </div>
+        <section className="download-station">
+          <div className="download-actions">
+            <button
+              className="download-button"
+              onClick={startDownload}
+              disabled={downloading}
+            >
+              <span className="button-shine" />
+              {downloading ? <LoaderCircle className="spin" /> : <Download />}
+              <span>
+                <strong>{downloading ? "Baixando mídia…" : "Iniciar download"}</strong>
+                <small>{downloading ? "Acompanhe o progresso abaixo" : "Executar com yt-dlp + FFmpeg"}</small>
+              </span>
+            </button>
+            <button className="folder-button" onClick={openFolder}>
+              <FolderOpen size={19} /> Abrir pasta
+            </button>
+          </div>
+          {(downloading || downloadLines.length > 0 || downloadMessage || downloadError) && (
+            <motion.div
+              className="download-progress"
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+            >
+              <div className="progress-caption">
+                <span>
+                  <Activity size={14} /> {downloading ? "Transferindo e processando" : "Processo finalizado"}
+                </span>
+                <strong>{Math.round(downloadPercent)}%</strong>
+              </div>
+              <div className="progress-track">
+                <motion.i animate={{ width: `${downloadPercent}%` }} transition={{ duration: 0.35 }} />
+              </div>
+              {downloadMessage && (
+                <div className="success-message">
+                  <CheckCircle2 size={17} /> {downloadMessage}
+                </div>
+              )}
+              {downloadError && <InlineError message={downloadError} />}
+              {downloadLines.length > 0 && (
+                <pre className="live-console" ref={consoleRef}>
+                  {downloadLines.join("\n")}
+                </pre>
+              )}
+            </motion.div>
+          )}
+        </section>
+      </>
+    );
+  }
+
+  const pages = [renderPlatform, renderSource, renderFormats, renderSettings, renderReview];
+  const CurrentStepIcon = steps[step].icon;
+
+  return (
+    <div className="app-shell">
+      <canvas className="gpu-backdrop" ref={gpuCanvasRef} aria-hidden="true" />
+      <div className="ambient ambient-one" />
+      <div className="ambient ambient-two" />
+      <div className="noise" />
+
+      <header className="topbar">
+        <div className="brand">
+          <span className="brand-logo">
+            <Download size={22} />
+            <i />
+          </span>
+          <div>
+            <strong>YT-DLP <em>DECK</em></strong>
+            <small>Media acquisition studio</small>
+          </div>
+        </div>
+        <div className="top-center">
+          <CurrentStepIcon size={14} />
+          <span>{steps[step].title}</span>
+          <i />
+          <span>{step + 1} de {steps.length}</span>
+        </div>
+        <div className="tools">
+          <ToolBadge label="yt-dlp" ready={Boolean(tools?.ytDlp)} version={tools?.ytDlpVersion} />
+          <ToolBadge label="FFmpeg" ready={Boolean(tools?.ffmpeg)} version={tools?.ffmpegVersion} />
+        </div>
+      </header>
+
+      <aside className="sidebar">
+        <div className="sidebar-title">Fluxo de download</div>
+        <nav>
+          {steps.map((item, index) => {
+            const Icon = item.icon;
+            const done = index < step;
+            return (
+              <button
+                key={item.title}
+                className={`${index === step ? "is-active" : ""} ${done ? "is-done" : ""}`}
+                disabled={index > step}
+                onClick={() => index <= step && setStep(index)}
+              >
+                <span className="step-icon">
+                  {done ? <Check size={16} /> : <Icon size={17} />}
+                </span>
+                <span>
+                  <strong>{item.title}</strong>
+                  <small>{item.subtitle}</small>
+                </span>
+                {index === step && <motion.i layoutId="active-step" transition={transition} />}
+              </button>
+            );
+          })}
+        </nav>
+        <div className="sidebar-progress">
+          <div>
+            <span>Progresso</span>
+            <strong>{Math.round(progress)}%</strong>
+          </div>
+          <div className="progress-track">
+            <motion.i animate={{ width: `${progress}%` }} />
+          </div>
+          <small>Suas escolhas são mantidas entre as etapas.</small>
+          <small className="renderer-label">{gpuRenderer}</small>
+        </div>
+      </aside>
+
+      <main className="main-stage">
+        <AnimatePresence>
+          {tools && (!tools.ytDlp || !tools.ffmpeg) && (
+            <motion.div
+              className="tool-check-banner"
+              initial={{ opacity: 0, y: -16 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -12 }}
+            >
+              <AlertCircle size={19} />
+              <div>
+                <strong>Ferramentas não encontradas nesta instalação</strong>
+                <span>
+                  Coloque <b>yt-dlp.exe</b> e <b>ffmpeg.exe</b> na mesma pasta do aplicativo.
+                </span>
+              </div>
+              <button onClick={checkTools}>
+                <RotateCcw size={15} /> Checar novamente
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+        <AnimatePresence mode="wait">
+          <motion.div className="page" key={step} {...pageMotion}>
+            {pages[step]()}
+            {step < steps.length - 1 && (
+              <div className="transport">
+                <button
+                  className="back-button"
+                  onClick={() => setStep((current) => Math.max(0, current - 1))}
+                  disabled={step === 0}
+                >
+                  <ArrowLeft size={17} /> Voltar
+                </button>
+                <div className="transport-hint">
+                  {validStep ? (
+                    <>
+                      <CheckCircle2 size={15} /> Etapa pronta
+                    </>
+                  ) : (
+                    <>
+                      <AlertCircle size={15} /> Complete a seleção
+                    </>
+                  )}
+                </div>
+                <button className="next-button" onClick={goNext} disabled={!validStep}>
+                  Continuar <ArrowRight size={17} />
+                </button>
+              </div>
+            )}
+          </motion.div>
+        </AnimatePresence>
+      </main>
+    </div>
+  );
+}
+
+function PageHeader({
+  eyebrow,
+  title,
+  description,
+  icon: Icon,
+}: {
+  eyebrow: string;
+  title: React.ReactNode;
+  description: string;
+  icon: LucideIcon;
+}) {
+  return (
+    <header className="page-header">
+      <div className="eyebrow">
+        <span>
+          <Icon size={14} />
+        </span>
+        {eyebrow}
+      </div>
+      <h1>{title}</h1>
+      <p>{description}</p>
+    </header>
+  );
+}
+
+function InlineError({ message }: { message: string }) {
+  return (
+    <motion.div
+      className="inline-error"
+      initial={{ opacity: 0, y: -8 }}
+      animate={{ opacity: 1, y: 0 }}
+    >
+      <AlertCircle size={16} />
+      <span>{message}</span>
+    </motion.div>
+  );
+}
+
+function ReviewRow({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="review-row">
+      <span>
+        <Icon size={16} />
+      </span>
+      <div>
+        <small>{label}</small>
+        <strong>{value}</strong>
+      </div>
+    </div>
+  );
+}
+
+export default App;

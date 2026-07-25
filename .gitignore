@@ -1,0 +1,30 @@
+/node_modules
+/dist
+/public/visual-core.wasm
+/src-tauri/target
+/src-tauri/gen
+/_run_temp.bat
+*.pdb
+
+# Ferramentas e artefatos grandes
+/ffmpeg.exe
+/yt-dlp.exe
+/*.zip
+
+# Downloads e arquivos pessoais
+/Downloads/
+/cookie.txt
+/historico_downloads.txt
+/sad.txt
+/*.mp3
+/*.mp4
+/*.mkv
+/*.webm
+/*.wav
+/*.flac
+
+# Sistema e editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
