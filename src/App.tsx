@@ -1,7 +1,7 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import {
   Activity,
   AlertCircle,
@@ -17,6 +17,7 @@ import {
   Cookie,
   Disc3,
   Download,
+  ExternalLink,
   FileAudio,
   FileText,
   Film,
@@ -46,6 +47,7 @@ import {
   UserRound,
   Video,
   WandSparkles,
+  X,
   Youtube,
 } from "lucide-react";
 import type {
@@ -200,22 +202,32 @@ const MediaCard = memo(function MediaCard({
   media,
   selected,
   onClick,
+  onPreview,
   large = false,
 }: {
   media: SearchResult;
   selected: boolean;
   onClick?: () => void;
+  onPreview?: (trigger: HTMLButtonElement) => void;
   large?: boolean;
 }) {
   const uploader = "Resultado da pesquisa";
   return (
-    <motion.button
-      type="button"
+    <motion.article
       className={`media-card ${selected ? "is-selected" : ""} ${large ? "is-large" : ""}`}
-      onClick={onClick}
       whileHover={onClick ? { y: -6 } : undefined}
-      whileTap={onClick ? { scale: 0.985 } : undefined}
     >
+      {onClick && (
+        <button
+          type="button"
+          className="media-select-hitbox"
+          onClick={onClick}
+          aria-label={`Selecionar ${media.title}`}
+          aria-pressed={selected}
+        >
+          <span className="sr-only">Selecionar {media.title}</span>
+        </button>
+      )}
       <div className="media-cover">
         {media.thumbnail ? (
           <img
@@ -233,9 +245,20 @@ const MediaCard = memo(function MediaCard({
         <span className="duration-badge">
           <Clock3 size={12} /> {media.duration || "—"}
         </span>
-        <span className="play-orbit">
-          <Play size={18} fill="currentColor" />
-        </span>
+        {onPreview && (
+          <button
+            type="button"
+            className="play-orbit"
+            aria-label={`Reproduzir prévia de ${media.title}`}
+            title="Reproduzir prévia"
+            onClick={(event) => {
+              event.stopPropagation();
+              onPreview(event.currentTarget);
+            }}
+          >
+            <Play size={18} fill="currentColor" />
+          </button>
+        )}
       </div>
       <div className="media-content">
         <div className="media-title">{media.title}</div>
@@ -256,21 +279,153 @@ const MediaCard = memo(function MediaCard({
           </motion.span>
         )}
       </AnimatePresence>
-    </motion.button>
+    </motion.article>
   );
 });
+
+function getYouTubeEmbedUrl(media: SearchResult) {
+  let videoId = media.id.trim();
+  if (!/^[\w-]{11}$/.test(videoId)) {
+    try {
+      const parsed = new URL(media.url);
+      videoId = parsed.hostname.includes("youtu.be")
+        ? parsed.pathname.slice(1)
+        : parsed.searchParams.get("v") || "";
+    } catch {
+      videoId = "";
+    }
+  }
+  if (!videoId) return "";
+  return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?autoplay=1&rel=0&modestbranding=1`;
+}
+
+function VideoPreview({
+  media,
+  onClose,
+  onOpenExternal,
+}: {
+  media: SearchResult;
+  onClose: () => void;
+  onOpenExternal: () => void;
+}) {
+  const embedUrl = getYouTubeEmbedUrl(media);
+  const dialogRef = useRef<HTMLElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const background = document.querySelectorAll<HTMLElement>(".topbar, .sidebar, .main-stage");
+    background.forEach((element) => element.setAttribute("inert", ""));
+    closeButtonRef.current?.focus();
+
+    const keepFocusInside = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab" || !dialogRef.current) return;
+      const focusable = Array.from(
+        dialogRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), iframe, [href], [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    window.addEventListener("keydown", keepFocusInside);
+    return () => {
+      window.removeEventListener("keydown", keepFocusInside);
+      background.forEach((element) => element.removeAttribute("inert"));
+    };
+  }, [onClose]);
+
+  return (
+    <motion.div
+      className="video-preview-backdrop"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      onClick={onClose}
+    >
+      <motion.section
+        ref={dialogRef}
+        className="video-preview-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Prévia de ${media.title}`}
+        initial={{ opacity: 0, y: 24, scale: 0.96 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 18, scale: 0.97 }}
+        transition={transition}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="video-preview-head">
+          <div>
+            <span><MonitorPlay size={15} /> Prévia do vídeo</span>
+            <strong>{media.title}</strong>
+          </div>
+          <button
+            ref={closeButtonRef}
+            type="button"
+            onClick={onClose}
+            aria-label="Fechar prévia"
+            title="Fechar"
+          >
+            <X size={20} />
+          </button>
+        </header>
+        <div className="video-preview-frame">
+          {embedUrl ? (
+            <iframe
+              key={embedUrl}
+              src={embedUrl}
+              title={`Prévia de ${media.title}`}
+              allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+              allowFullScreen
+              referrerPolicy="strict-origin-when-cross-origin"
+            />
+          ) : (
+            <div className="video-preview-unavailable">
+              <AlertCircle size={26} />
+              <strong>Não foi possível montar a prévia deste vídeo.</strong>
+            </div>
+          )}
+        </div>
+        <footer className="video-preview-footer">
+          <div>
+            <span><CheckCircle2 size={15} /> Este vídeo já está selecionado para download</span>
+            <small>Se a prévia não carregar, abra o vídeo diretamente no YouTube.</small>
+          </div>
+          <button type="button" onClick={onOpenExternal}>
+            <ExternalLink size={15} /> Abrir no YouTube
+          </button>
+        </footer>
+      </motion.section>
+    </motion.div>
+  );
+}
 
 function App() {
   const [step, setStep] = useState(0);
   const [platform, setPlatform] = useState<string | null>(null);
   const [platformFolder, setPlatformFolder] = useState("");
   const [sourceMode, setSourceMode] = useState<SourceMode>("url");
-  const [url, setUrl] = useState("");
+  const [directUrl, setDirectUrl] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [selectedResult, setSelectedResult] = useState<number | null>(null);
+  const [previewMedia, setPreviewMedia] = useState<SearchResult | null>(null);
   const [format, setFormat] = useState<FormatId | null>(null);
   const [quality, setQuality] = useState<QualityId>("best");
   const [cookies, setCookies] = useState<CookieId>("none");
@@ -285,6 +440,8 @@ function App() {
   const downloadBufferRef = useRef<string[]>([]);
   const downloadPercentRef = useRef(0);
   const downloadFlushRef = useRef<number | null>(null);
+  const searchRequestRef = useRef(0);
+  const previewTriggerRef = useRef<HTMLButtonElement | null>(null);
   const gpuCanvasRef = useRef<HTMLCanvasElement>(null);
   const gpuControllerRef = useRef<BackdropController | null>(null);
   const [gpuRenderer, setGpuRenderer] = useState("GPU iniciando");
@@ -292,15 +449,18 @@ function App() {
   const selectedFormat = formats.find((item) => item.id === format);
   const selectedQuality = qualities.find((item) => item.id === quality);
   const selectedCookie = cookieOptions.find((item) => item.id === cookies);
+  const selectedMedia = selectedResult !== null ? results[selectedResult] ?? null : null;
+  const activeUrl = sourceMode === "search" ? selectedMedia?.url || "" : directUrl;
+  const searchAvailable = platform === "YouTube";
   const progress = (step / (steps.length - 1)) * 100;
 
   const validStep = useMemo(() => {
     if (step === 0) return Boolean(platformFolder.trim());
-    if (step === 1) return Boolean(url.trim());
+    if (step === 1) return Boolean(activeUrl.trim());
     if (step === 2) return Boolean(format);
     if (step === 3) return cookies !== "file" || Boolean(cookieFile.trim());
     return true;
-  }, [step, platformFolder, url, format, cookies, cookieFile]);
+  }, [step, platformFolder, activeUrl, format, cookies, cookieFile]);
 
   useEffect(() => {
     let active = true;
@@ -361,6 +521,10 @@ function App() {
   }, [step, downloadPercent]);
 
   useEffect(() => {
+    gpuControllerRef.current?.setPaused(Boolean(previewMedia));
+  }, [previewMedia]);
+
+  useEffect(() => {
     if (consoleRef.current) consoleRef.current.scrollTop = consoleRef.current.scrollHeight;
   }, [downloadLines]);
 
@@ -376,13 +540,19 @@ function App() {
   function choosePlatform(id: string) {
     setPlatform(id);
     setPlatformFolder(id === "Outro" ? "" : id);
+    if (id !== "YouTube") {
+      searchRequestRef.current += 1;
+      setSearching(false);
+      setSourceMode("url");
+      setPreviewMedia(null);
+    }
   }
 
   async function pasteUrl() {
     try {
       const value = await navigator.clipboard.readText();
       if (value) {
-        setUrl(value.trim());
+        setDirectUrl(value.trim());
       }
     } catch (error) {
       setSearchError(`Não foi possível acessar a área de transferência: ${errorText(error)}`);
@@ -390,24 +560,46 @@ function App() {
   }
 
   async function searchVideos() {
-    if (!searchQuery.trim()) return;
+    if (!searchAvailable || !searchQuery.trim()) return;
+    const requestId = ++searchRequestRef.current;
     setSearching(true);
     setSearchError("");
     setResults([]);
     setSelectedResult(null);
+    setPreviewMedia(null);
     try {
       const items = await invoke<SearchResult[]>("search_videos", { query: searchQuery.trim() });
+      if (requestId !== searchRequestRef.current) return;
       setResults(items);
     } catch (error) {
+      if (requestId !== searchRequestRef.current) return;
       setSearchError(errorText(error));
     } finally {
-      setSearching(false);
+      if (requestId === searchRequestRef.current) setSearching(false);
     }
   }
 
   function chooseResult(item: SearchResult, index: number) {
     setSelectedResult(index);
-    setUrl(item.url);
+  }
+
+  function previewResult(item: SearchResult, index: number, trigger: HTMLButtonElement) {
+    chooseResult(item, index);
+    previewTriggerRef.current = trigger;
+    setPreviewMedia(item);
+  }
+
+  const closePreview = useCallback(() => {
+    setPreviewMedia(null);
+  }, []);
+
+  async function openPreviewInBrowser() {
+    if (!previewMedia) return;
+    try {
+      await invoke("open_external_url", { url: previewMedia.url });
+    } catch (error) {
+      setSearchError(`Não foi possível abrir o navegador: ${errorText(error)}`);
+    }
   }
 
   async function startDownload() {
@@ -420,7 +612,7 @@ function App() {
     setDownloadMessage("");
     setDownloadError("");
     const request: DownloadRequest = {
-      url: url.trim(),
+      url: activeUrl.trim(),
       platformFolder: platformFolder.trim(),
       format,
       quality,
@@ -457,7 +649,7 @@ function App() {
     if (!format) return "";
     const parts = [
       "yt-dlp",
-      `"${url}"`,
+      `"${activeUrl}"`,
       `-o "Downloads\\YT-DLP Deck\\${platformFolder}\\%(uploader)s - %(title)s [%(id)s].%(ext)s"`,
       "--no-playlist",
       "--add-metadata",
@@ -507,10 +699,11 @@ function App() {
               animate={{ opacity: 1, height: "auto", y: 0 }}
               exit={{ opacity: 0, height: 0 }}
             >
-              <label>
+              <label htmlFor="platform-folder">
                 <FolderOpen size={15} /> Nome da pasta
               </label>
               <input
+                id="platform-folder"
                 value={platformFolder}
                 onChange={(event) => setPlatformFolder(event.target.value)}
                 placeholder="Ex.: Vimeo, Dailymotion ou Cursos"
@@ -532,16 +725,26 @@ function App() {
           description="Cole um link direto ou pesquise pelo nome. Na pesquisa, cada resultado aparece com sua capa para você escolher com segurança."
           icon={WandSparkles}
         />
-        <div className="source-tabs">
+        <div className="source-tabs" role="tablist" aria-label="Forma de escolher o conteúdo">
           <button
+            type="button"
+            role="tab"
+            aria-selected={sourceMode === "url"}
+            aria-controls="source-url-panel"
             className={sourceMode === "url" ? "is-active" : ""}
             onClick={() => setSourceMode("url")}
           >
             <Link2 size={16} /> Link direto
           </button>
           <button
+            type="button"
+            role="tab"
+            aria-selected={sourceMode === "search"}
+            aria-controls="source-search-panel"
             className={sourceMode === "search" ? "is-active" : ""}
             onClick={() => setSourceMode("search")}
+            disabled={!searchAvailable}
+            title={searchAvailable ? "Pesquisar no YouTube" : "A pesquisa por nome está disponível para YouTube"}
           >
             <Search size={16} /> Pesquisar vídeo
           </button>
@@ -551,18 +754,33 @@ function App() {
             transition={transition}
           />
         </div>
+        {!searchAvailable && (
+          <div className="source-search-note" role="note">
+            <Youtube size={15} />
+            A pesquisa por nome usa o YouTube. Para {platformFolder || "esta plataforma"}, use um link direto.
+          </div>
+        )}
         <AnimatePresence mode="wait">
           {sourceMode === "url" ? (
-            <motion.div key="url" {...pageMotion} className="source-area">
+            <motion.div
+              id="source-url-panel"
+              role="tabpanel"
+              key="url"
+              {...pageMotion}
+              className="source-area"
+            >
               <div className="field-panel hero-input">
-                <label>
+                <label htmlFor="direct-media-url">
                   <Link2 size={15} /> URL da mídia
                 </label>
                 <div className="input-actions">
                   <input
-                    value={url}
-                    onChange={(event) => setUrl(event.target.value)}
-                    onKeyDown={(event) => event.key === "Enter" && url.trim() && goNext()}
+                    id="direct-media-url"
+                    type="url"
+                    inputMode="url"
+                    value={directUrl}
+                    onChange={(event) => setDirectUrl(event.target.value)}
+                    onKeyDown={(event) => event.key === "Enter" && directUrl.trim() && goNext()}
                     placeholder="https://youtube.com/watch?v=..."
                   />
                   <button className="soft-button" onClick={pasteUrl} title="Colar URL">
@@ -572,13 +790,21 @@ function App() {
               </div>
             </motion.div>
           ) : (
-            <motion.div key="search" {...pageMotion} className="source-area">
+            <motion.div
+              id="source-search-panel"
+              role="tabpanel"
+              key="search"
+              {...pageMotion}
+              className="source-area"
+            >
               <div className="field-panel hero-input">
-                <label>
+                <label htmlFor="video-search-query">
                   <Search size={15} /> Pesquisa inteligente
                 </label>
                 <div className="input-actions">
                   <input
+                    id="video-search-query"
+                    type="search"
                     value={searchQuery}
                     onChange={(event) => setSearchQuery(event.target.value)}
                     onKeyDown={(event) => event.key === "Enter" && void searchVideos()}
@@ -595,6 +821,15 @@ function App() {
                 </div>
               </div>
               {searchError && <InlineError message={searchError} />}
+              <div className="sr-only" aria-live="polite" aria-atomic="true">
+                {searching
+                  ? "Pesquisando vídeos no YouTube."
+                  : results.length
+                    ? `${results.length} vídeos encontrados.`
+                    : searchError
+                      ? `Erro na pesquisa: ${searchError}`
+                      : ""}
+              </div>
               {searching && (
                 <div className="skeleton-grid">
                   {[0, 1, 2].map((item) => (
@@ -622,6 +857,7 @@ function App() {
                     media={item}
                     selected={selectedResult === index}
                     onClick={() => chooseResult(item, index)}
+                    onPreview={(trigger) => previewResult(item, index, trigger)}
                   />
                 ))}
               </motion.div>
@@ -754,10 +990,11 @@ function App() {
                   animate={{ opacity: 1, height: "auto" }}
                   exit={{ opacity: 0, height: 0 }}
                 >
-                  <label>
+                  <label htmlFor="cookie-file-path">
                     <FileText size={14} /> Caminho do cookies.txt
                   </label>
                   <input
+                    id="cookie-file-path"
                     value={cookieFile}
                     onChange={(event) => setCookieFile(event.target.value)}
                     placeholder="C:\caminho\cookies.txt"
@@ -772,7 +1009,7 @@ function App() {
   }
 
   function renderReview() {
-    const chosenMedia = selectedResult !== null ? results[selectedResult] : null;
+    const chosenMedia = sourceMode === "search" ? selectedMedia : null;
     return (
       <>
         <PageHeader
@@ -783,7 +1020,17 @@ function App() {
         />
         <div className="review-grid">
           <section className="review-panel">
-            {chosenMedia && <MediaCard media={chosenMedia} selected large />}
+            {chosenMedia && (
+              <MediaCard
+                media={chosenMedia}
+                selected
+                large
+                onPreview={(trigger) => {
+                  previewTriggerRef.current = trigger;
+                  setPreviewMedia(chosenMedia);
+                }}
+              />
+            )}
             <div className="review-list">
               <ReviewRow icon={FolderOpen} label="Destino" value={platformFolder} />
               <ReviewRow
@@ -794,7 +1041,7 @@ function App() {
                 }`}
               />
               <ReviewRow icon={Cookie} label="Acesso" value={selectedCookie?.label || "—"} />
-              {!chosenMedia && <ReviewRow icon={Link2} label="URL" value={url} />}
+              {!chosenMedia && <ReviewRow icon={Link2} label="URL" value={activeUrl} />}
             </div>
           </section>
           <section className="terminal-panel">
@@ -841,11 +1088,18 @@ function App() {
                 </span>
                 <strong>{Math.round(downloadPercent)}%</strong>
               </div>
-              <div className="progress-track">
+              <div
+                className="progress-track"
+                role="progressbar"
+                aria-label="Progresso do download"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(downloadPercent)}
+              >
                 <motion.i animate={{ width: `${downloadPercent}%` }} transition={{ duration: 0.35 }} />
               </div>
               {downloadMessage && (
-                <div className="success-message">
+                <div className="success-message" role="status" aria-live="polite">
                   <CheckCircle2 size={17} /> {downloadMessage}
                 </div>
               )}
@@ -866,6 +1120,7 @@ function App() {
   const CurrentStepIcon = steps[step].icon;
 
   return (
+    <MotionConfig reducedMotion="user">
     <div className="app-shell">
       <canvas className="gpu-backdrop" ref={gpuCanvasRef} aria-hidden="true" />
       <div className="ambient ambient-one" />
@@ -925,7 +1180,14 @@ function App() {
             <span>Progresso</span>
             <strong>{Math.round(progress)}%</strong>
           </div>
-          <div className="progress-track">
+          <div
+            className="progress-track"
+            role="progressbar"
+            aria-label="Progresso das etapas"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(progress)}
+          >
             <motion.i animate={{ width: `${progress}%` }} />
           </div>
           <small>Suas escolhas são mantidas entre as etapas.</small>
@@ -986,7 +1248,18 @@ function App() {
           </motion.div>
         </AnimatePresence>
       </main>
+      <AnimatePresence onExitComplete={() => previewTriggerRef.current?.focus()}>
+        {previewMedia && (
+          <VideoPreview
+            key={previewMedia.id}
+            media={previewMedia}
+            onClose={closePreview}
+            onOpenExternal={openPreviewInBrowser}
+          />
+        )}
+      </AnimatePresence>
     </div>
+    </MotionConfig>
   );
 }
 
@@ -1019,6 +1292,7 @@ function InlineError({ message }: { message: string }) {
   return (
     <motion.div
       className="inline-error"
+      role="alert"
       initial={{ opacity: 0, y: -8 }}
       animate={{ opacity: 1, y: 0 }}
     >

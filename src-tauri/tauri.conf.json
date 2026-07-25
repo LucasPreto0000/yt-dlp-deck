@@ -16,8 +16,8 @@
         "title": "YT-DLP Deck",
         "width": 1280,
         "height": 820,
-        "minWidth": 900,
-        "minHeight": 640,
+        "minWidth": 560,
+        "minHeight": 580,
         "resizable": true,
         "fullscreen": false,
         "center": true

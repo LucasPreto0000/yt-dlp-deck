@@ -13,7 +13,7 @@ use std::{
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::{
     fs,
-    io::{AsyncBufReadExt, BufReader},
+    io::{AsyncBufReadExt, AsyncRead, BufReader},
     process::Command,
 };
 
@@ -89,6 +89,28 @@ fn require_tool(app: &AppHandle, file_name: &str) -> Result<PathBuf, String> {
             "{file_name} não foi encontrado. Coloque-o na mesma pasta do aplicativo e tente novamente."
         )
     })
+}
+
+fn find_runtime(app: &AppHandle, file_name: &str) -> Option<PathBuf> {
+    if let Ok(directory) = app_tools_dir(app) {
+        let local = directory.join(file_name);
+        if local.is_file() {
+            return Some(local);
+        }
+    }
+    std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .map(|directory| directory.join(file_name))
+            .find(|candidate| candidate.is_file())
+    })
+}
+
+fn javascript_runtime(app: &AppHandle) -> Option<String> {
+    find_runtime(app, "deno.exe")
+        .map(|path| format!("deno:{}", path.to_string_lossy()))
+        .or_else(|| {
+            find_runtime(app, "node.exe").map(|path| format!("node:{}", path.to_string_lossy()))
+        })
 }
 
 fn downloads_root(app: &AppHandle) -> Result<PathBuf, String> {
@@ -309,8 +331,17 @@ async fn search_videos(app: AppHandle, query: String) -> Result<Vec<SearchResult
         "5",
         "--dump-json",
         "--no-warnings",
+        "--encoding",
+        "utf-8",
         &format!("ytsearch5:{query}"),
     ]);
+    if let Some(runtime) = javascript_runtime(&app) {
+        command.args(["--js-runtimes", &runtime]);
+    }
+    command
+        .env("PYTHONIOENCODING", "utf-8")
+        .env("PYTHONUTF8", "1")
+        .stdin(Stdio::null());
     hide_console(&mut command);
     let output = command
         .output()
@@ -399,19 +430,29 @@ fn build_download_args(
     request: &DownloadRequest,
     output_template: &Path,
     ffmpeg: &Path,
+    js_runtime: Option<&str>,
 ) -> Vec<String> {
     let mut args = vec![
-        request.url.trim().to_owned(),
         "-o".to_owned(),
         output_template.to_string_lossy().into_owned(),
         "--no-playlist".to_owned(),
         "--add-metadata".to_owned(),
         "--newline".to_owned(),
+        "--no-colors".to_owned(),
+        "--encoding".to_owned(),
+        "utf-8".to_owned(),
+        "--windows-filenames".to_owned(),
+        "--trim-filenames".to_owned(),
+        "180".to_owned(),
         "--concurrent-fragments".to_owned(),
         "4".to_owned(),
         "--ffmpeg-location".to_owned(),
         ffmpeg.to_string_lossy().into_owned(),
     ];
+
+    if let Some(runtime) = js_runtime {
+        args.extend(["--js-runtimes".to_owned(), runtime.to_owned()]);
+    }
 
     match request.cookies.as_str() {
         "chrome" | "edge" | "firefox" => {
@@ -447,7 +488,41 @@ fn build_download_args(
             }
         }
     }
+    args.extend(["--".to_owned(), request.url.trim().to_owned()]);
     args
+}
+
+async fn forward_process_output<R>(reader: R, app: AppHandle)
+where
+    R: AsyncRead + Unpin,
+{
+    let mut reader = BufReader::new(reader);
+    let mut bytes = Vec::with_capacity(512);
+    loop {
+        bytes.clear();
+        match reader.read_until(b'\n', &mut bytes).await {
+            Ok(0) => break,
+            Ok(_) => {
+                let line = decode_process_line(&bytes);
+                if !line.is_empty() {
+                    let _ = app.emit("download-output", line);
+                }
+            }
+            Err(error) => {
+                let _ = app.emit(
+                    "download-output",
+                    format!("Falha ao ler a saída do yt-dlp: {error}"),
+                );
+                break;
+            }
+        }
+    }
+}
+
+fn decode_process_line(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .trim_end_matches(['\r', '\n'])
+        .to_owned()
 }
 
 #[tauri::command]
@@ -471,11 +546,15 @@ async fn start_download(
     let output_template = output_dir.join("%(uploader)s - %(title)s [%(id)s].%(ext)s");
     let executable = require_tool(&app, "yt-dlp.exe")?;
     let ffmpeg = require_tool(&app, "ffmpeg.exe")?;
-    let args = build_download_args(&request, &output_template, &ffmpeg);
+    let js_runtime = javascript_runtime(&app);
+    let args = build_download_args(&request, &output_template, &ffmpeg, js_runtime.as_deref());
 
     let mut command = Command::new(executable);
     command
         .args(&args)
+        .env("PYTHONIOENCODING", "utf-8")
+        .env("PYTHONUTF8", "1")
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     hide_console(&mut command);
@@ -487,18 +566,8 @@ async fn start_download(
     let out_app = app.clone();
     let err_app = app.clone();
 
-    let stdout_task = tokio::spawn(async move {
-        let mut lines = BufReader::new(stdout).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            let _ = out_app.emit("download-output", line);
-        }
-    });
-    let stderr_task = tokio::spawn(async move {
-        let mut lines = BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            let _ = err_app.emit("download-output", line);
-        }
-    });
+    let stdout_task = tokio::spawn(forward_process_output(stdout, out_app));
+    let stderr_task = tokio::spawn(forward_process_output(stderr, err_app));
 
     let exit = child
         .wait()
@@ -566,6 +635,32 @@ async fn open_downloads_folder(
     Ok(())
 }
 
+#[tauri::command]
+async fn open_external_url(url: String) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(url.trim())
+        .map_err(|_| "O endereço do vídeo é inválido.".to_owned())?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("Somente endereços HTTP ou HTTPS podem ser abertos.".to_owned());
+    }
+    let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
+    let trusted_host = host == "youtu.be"
+        || host == "youtube.com"
+        || host.ends_with(".youtube.com")
+        || host == "youtube-nocookie.com"
+        || host.ends_with(".youtube-nocookie.com");
+    if !trusted_host {
+        return Err("A prévia só pode abrir endereços oficiais do YouTube.".to_owned());
+    }
+
+    let mut command = Command::new("explorer.exe");
+    command.arg(parsed.as_str());
+    hide_console(&mut command);
+    command
+        .spawn()
+        .map_err(|e| format!("Não foi possível abrir o navegador: {e}"))?;
+    Ok(())
+}
+
 #[cfg(windows)]
 fn hide_console(command: &mut Command) {
     command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
@@ -582,8 +677,52 @@ pub fn run() {
             get_tool_status,
             search_videos,
             start_download,
-            open_downloads_folder
+            open_downloads_folder,
+            open_external_url
         ])
         .run(tauri::generate_context!())
         .expect("erro ao executar o YT-DLP Deck");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn process_output_tolerates_windows_1252_bytes() {
+        let decoded = decode_process_line(&[b'T', 0x96, b'X', b'\r', b'\n']);
+        assert!(decoded.starts_with('T'));
+        assert!(decoded.ends_with('X'));
+    }
+
+    #[test]
+    fn download_url_is_placed_after_argument_separator() {
+        let request = DownloadRequest {
+            url: "--exec=calc.exe".to_owned(),
+            platform_folder: "YouTube".to_owned(),
+            format: "mp3".to_owned(),
+            quality: Some("best".to_owned()),
+            cookies: "none".to_owned(),
+            cookie_file: None,
+        };
+        let args = build_download_args(
+            &request,
+            Path::new("output.%(ext)s"),
+            Path::new("ffmpeg.exe"),
+            Some("node:C:\\Program Files\\nodejs\\node.exe"),
+        );
+        let separator = args
+            .iter()
+            .position(|argument| argument == "--")
+            .expect("separador de argumentos ausente");
+        assert_eq!(separator, args.len() - 2);
+        assert_eq!(args.last().map(String::as_str), Some("--exec=calc.exe"));
+        assert!(!args[..separator]
+            .iter()
+            .any(|argument| argument == "--exec=calc.exe"));
+        assert!(args
+            .iter()
+            .any(|argument| argument == "--windows-filenames"));
+        assert!(args.iter().any(|argument| argument.starts_with("node:")));
+    }
 }

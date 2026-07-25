@@ -7,15 +7,52 @@ type VisualCore = {
 
 export type BackdropController = {
   setProgress(value: number): void;
+  setPaused(value: boolean): void;
   destroy(): void;
   renderer: "webgpu-wgsl" | "webgl2-glsl";
 };
 
 async function loadVisualCore(): Promise<VisualCore> {
   const response = await fetch("/visual-core.wasm");
+  if (!response.ok) {
+    throw new Error(`Falha ao carregar o núcleo visual (${response.status}).`);
+  }
   const bytes = await response.arrayBuffer();
   const instance = await WebAssembly.instantiate(bytes, {});
   return instance.instance.exports as unknown as VisualCore;
+}
+
+function createCanvasResizer(canvas: HTMLCanvasElement) {
+  const resize = () => {
+    const scale = Math.min(window.devicePixelRatio || 1, 1.25);
+    const width = Math.max(1, Math.floor(canvas.clientWidth * scale));
+    const height = Math.max(1, Math.floor(canvas.clientHeight * scale));
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+  };
+  resize();
+  const observer = new ResizeObserver(resize);
+  observer.observe(canvas);
+  return () => observer.disconnect();
+}
+
+function createCoreSampler(core: VisualCore) {
+  const values = new Float32Array(4);
+  let lastSample = Number.NEGATIVE_INFINITY;
+  return (time: number, progress: number) => {
+    // Os parâmetros mudam lentamente; 20 amostras/s evitam quatro travessias
+    // JS→WASM em cada frame sem alterar visualmente a animação.
+    if (time - lastSample >= 50) {
+      lastSample = time;
+      values[0] = core.pulse(time);
+      values[1] = core.driftX(time);
+      values[2] = core.driftY(time);
+      values[3] = core.energy(time, progress);
+    }
+    return values;
+  };
 }
 
 const wgslShader = /* wgsl */ `
@@ -113,16 +150,6 @@ void main() {
   outColor = vec4(color, 1.0);
 }`;
 
-function resizeCanvas(canvas: HTMLCanvasElement) {
-  const scale = Math.min(window.devicePixelRatio || 1, 1.25);
-  const width = Math.max(1, Math.floor(canvas.clientWidth * scale));
-  const height = Math.max(1, Math.floor(canvas.clientHeight * scale));
-  if (canvas.width !== width || canvas.height !== height) {
-    canvas.width = width;
-    canvas.height = height;
-  }
-}
-
 async function startWebGpu(
   canvas: HTMLCanvasElement,
   core: VisualCore,
@@ -150,27 +177,32 @@ async function startWebGpu(
     layout: pipeline.getBindGroupLayout(0),
     entries: [{ binding: 0, resource: { buffer: uniformBuffer } }],
   });
+  const uniforms = new Float32Array(8);
+  const sampleCore = createCoreSampler(core);
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   let frame = 0;
   let progress = 0;
   let stopped = false;
-  const render = (now: number) => {
-    if (stopped) return;
-    if (document.hidden) {
+  let paused = false;
+
+  const requestRender = () => {
+    if (!stopped && !paused && !document.hidden && frame === 0) {
       frame = requestAnimationFrame(render);
-      return;
     }
-    resizeCanvas(canvas);
-    const values = new Float32Array([
-      canvas.width,
-      canvas.height,
-      now / 1000,
-      core.pulse(now),
-      core.driftX(now),
-      core.driftY(now),
-      core.energy(now, progress),
-      progress,
-    ]);
-    device.queue.writeBuffer(uniformBuffer, 0, values);
+  };
+  const render = (now: number) => {
+    frame = 0;
+    if (stopped || paused || document.hidden) return;
+    const coreValues = sampleCore(now, progress);
+    uniforms[0] = canvas.width;
+    uniforms[1] = canvas.height;
+    uniforms[2] = now / 1000;
+    uniforms[3] = coreValues[0];
+    uniforms[4] = coreValues[1];
+    uniforms[5] = coreValues[2];
+    uniforms[6] = coreValues[3];
+    uniforms[7] = progress;
+    device.queue.writeBuffer(uniformBuffer, 0, uniforms);
     const encoder = device.createCommandEncoder();
     const pass = encoder.beginRenderPass({
       colorAttachments: [{
@@ -185,15 +217,40 @@ async function startWebGpu(
     pass.draw(3);
     pass.end();
     device.queue.submit([encoder.finish()]);
-    frame = requestAnimationFrame(render);
+    if (!reducedMotion.matches) requestRender();
   };
-  frame = requestAnimationFrame(render);
+  const handleVisibility = () => requestRender();
+  const handleMotionPreference = () => requestRender();
+  document.addEventListener("visibilitychange", handleVisibility);
+  reducedMotion.addEventListener("change", handleMotionPreference);
+  void device.lost.then(() => {
+    if (stopped) return;
+    stopped = true;
+    if (frame) cancelAnimationFrame(frame);
+    frame = 0;
+    canvas.classList.add("is-unavailable");
+  });
+  requestRender();
   return {
     renderer: "webgpu-wgsl",
-    setProgress: (value) => { progress = value; },
+    setProgress: (value) => {
+      progress = Math.min(1, Math.max(0, value));
+      requestRender();
+    },
+    setPaused: (value) => {
+      paused = value;
+      if (paused && frame) {
+        cancelAnimationFrame(frame);
+        frame = 0;
+      } else if (!paused) {
+        requestRender();
+      }
+    },
     destroy: () => {
       stopped = true;
-      cancelAnimationFrame(frame);
+      if (frame) cancelAnimationFrame(frame);
+      document.removeEventListener("visibilitychange", handleVisibility);
+      reducedMotion.removeEventListener("change", handleMotionPreference);
       uniformBuffer.destroy();
       device.destroy();
     },
@@ -217,14 +274,23 @@ function startWebGl(
 ): BackdropController {
   const gl = canvas.getContext("webgl2", { alpha: false, antialias: false });
   if (!gl) throw new Error("WebGL2 indisponível.");
-  const program = gl.createProgram()!;
-  gl.attachShader(program, compileShader(gl, gl.VERTEX_SHADER, glslVertex));
-  gl.attachShader(program, compileShader(gl, gl.FRAGMENT_SHADER, glslFragment));
+  const program = gl.createProgram();
+  if (!program) throw new Error("Não foi possível criar o programa WebGL.");
+  const vertexShader = compileShader(gl, gl.VERTEX_SHADER, glslVertex);
+  const fragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, glslFragment);
+  gl.attachShader(program, vertexShader);
+  gl.attachShader(program, fragmentShader);
   gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    throw new Error(gl.getProgramInfoLog(program) || "Falha ao vincular o programa GLSL.");
+  }
+  gl.deleteShader(vertexShader);
+  gl.deleteShader(fragmentShader);
   const buffer = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
   const position = gl.getAttribLocation(program, "position");
+  if (position < 0) throw new Error("Atributo de posição GLSL indisponível.");
   gl.enableVertexAttribArray(position);
   gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
   const resolution = gl.getUniformLocation(program, "resolution");
@@ -232,33 +298,66 @@ function startWebGl(
   const pulse = gl.getUniformLocation(program, "pulse");
   const drift = gl.getUniformLocation(program, "drift");
   const energy = gl.getUniformLocation(program, "energy");
+  const sampleCore = createCoreSampler(core);
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   let frame = 0;
   let progress = 0;
   let stopped = false;
-  const render = (now: number) => {
-    if (stopped) return;
-    if (document.hidden) {
+  let paused = false;
+
+  const requestRender = () => {
+    if (!stopped && !paused && !document.hidden && frame === 0) {
       frame = requestAnimationFrame(render);
-      return;
     }
-    resizeCanvas(canvas);
+  };
+  const render = (now: number) => {
+    frame = 0;
+    if (stopped || paused || document.hidden) return;
+    const coreValues = sampleCore(now, progress);
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.useProgram(program);
     gl.uniform2f(resolution, canvas.width, canvas.height);
     gl.uniform1f(time, now / 1000);
-    gl.uniform1f(pulse, core.pulse(now));
-    gl.uniform2f(drift, core.driftX(now), core.driftY(now));
-    gl.uniform1f(energy, core.energy(now, progress));
+    gl.uniform1f(pulse, coreValues[0]);
+    gl.uniform2f(drift, coreValues[1], coreValues[2]);
+    gl.uniform1f(energy, coreValues[3]);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
-    frame = requestAnimationFrame(render);
+    if (!reducedMotion.matches) requestRender();
   };
-  frame = requestAnimationFrame(render);
+  const handleVisibility = () => requestRender();
+  const handleMotionPreference = () => requestRender();
+  const handleContextLost = (event: Event) => {
+    event.preventDefault();
+    stopped = true;
+    if (frame) cancelAnimationFrame(frame);
+    frame = 0;
+    canvas.classList.add("is-unavailable");
+  };
+  document.addEventListener("visibilitychange", handleVisibility);
+  reducedMotion.addEventListener("change", handleMotionPreference);
+  canvas.addEventListener("webglcontextlost", handleContextLost);
+  requestRender();
   return {
     renderer: "webgl2-glsl",
-    setProgress: (value) => { progress = value; },
+    setProgress: (value) => {
+      progress = Math.min(1, Math.max(0, value));
+      requestRender();
+    },
+    setPaused: (value) => {
+      paused = value;
+      if (paused && frame) {
+        cancelAnimationFrame(frame);
+        frame = 0;
+      } else if (!paused) {
+        requestRender();
+      }
+    },
     destroy: () => {
       stopped = true;
-      cancelAnimationFrame(frame);
+      if (frame) cancelAnimationFrame(frame);
+      document.removeEventListener("visibilitychange", handleVisibility);
+      reducedMotion.removeEventListener("change", handleMotionPreference);
+      canvas.removeEventListener("webglcontextlost", handleContextLost);
       gl.deleteProgram(program);
       gl.deleteBuffer(buffer);
     },
@@ -267,5 +366,18 @@ function startWebGl(
 
 export async function startGpuBackdrop(canvas: HTMLCanvasElement) {
   const core = await loadVisualCore();
-  return (await startWebGpu(canvas, core)) ?? startWebGl(canvas, core);
+  const stopResizing = createCanvasResizer(canvas);
+  try {
+    const controller = (await startWebGpu(canvas, core)) ?? startWebGl(canvas, core);
+    return {
+      ...controller,
+      destroy: () => {
+        controller.destroy();
+        stopResizing();
+      },
+    };
+  } catch (error) {
+    stopResizing();
+    throw error;
+  }
 }
