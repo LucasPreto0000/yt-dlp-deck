@@ -2,6 +2,8 @@
 
 Aplicativo desktop para Windows construído com Tauri 2, Rust, HTML, CSS e JavaScript.
 
+FEITO INTEIRAMENTE POR IA, ENTAO TERÁ BUGS!!!!
+
 ## Usar
 
 Instale pelo arquivo:
