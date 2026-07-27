@@ -77,14 +77,15 @@ const platforms: Array<{
   description: string;
   icon: LucideIcon;
   color: string;
+  urlExample: string;
 }> = [
-  { id: "YouTube", label: "YouTube", description: "Vídeos, Shorts e lives", icon: Youtube, color: "#ff4164" },
-  { id: "TikTok", label: "TikTok", description: "Vídeos e tendências", icon: Music2, color: "#46edf2" },
-  { id: "Instagram", label: "Instagram", description: "Reels e publicações", icon: Instagram, color: "#f765a3" },
-  { id: "X_Twitter", label: "X / Twitter", description: "Vídeos e clipes", icon: Twitter, color: "#60baff" },
-  { id: "Twitch", label: "Twitch", description: "Clipes e transmissões", icon: Radio, color: "#a978ff" },
-  { id: "Reddit", label: "Reddit", description: "Mídias de comunidades", icon: MessageCircle, color: "#ff7045" },
-  { id: "Outro", label: "Outro site", description: "Qualquer site compatível", icon: Globe2, color: "#aab2d1" },
+  { id: "YouTube", label: "YouTube", description: "Vídeos, Shorts e lives", icon: Youtube, color: "#ff4164", urlExample: "https://www.youtube.com/watch?v=..." },
+  { id: "TikTok", label: "TikTok", description: "Vídeos e tendências", icon: Music2, color: "#46edf2", urlExample: "https://www.tiktok.com/@usuario/video/..." },
+  { id: "Instagram", label: "Instagram", description: "Reels e publicações", icon: Instagram, color: "#f765a3", urlExample: "https://www.instagram.com/reel/..." },
+  { id: "X_Twitter", label: "X / Twitter", description: "Vídeos e clipes", icon: Twitter, color: "#60baff", urlExample: "https://x.com/usuario/status/..." },
+  { id: "Twitch", label: "Twitch", description: "Clipes e transmissões", icon: Radio, color: "#a978ff", urlExample: "https://www.twitch.tv/videos/..." },
+  { id: "Reddit", label: "Reddit", description: "Mídias de comunidades", icon: MessageCircle, color: "#ff7045", urlExample: "https://www.reddit.com/r/comunidade/comments/..." },
+  { id: "Outro", label: "Outro site", description: "Qualquer site compatível", icon: Globe2, color: "#aab2d1", urlExample: "https://exemplo.com/video" },
 ];
 
 const formats: Array<{
@@ -451,6 +452,8 @@ function App() {
     ? cookieOptions.filter((item) => item.id === "none")
     : cookieOptions;
   const selectedCookie = availableCookieOptions.find((item) => item.id === cookies);
+  const directUrlPlaceholder =
+    platforms.find((item) => item.id === platform)?.urlExample ?? "https://exemplo.com/video";
   const selectedMedia = selectedResult !== null ? results[selectedResult] ?? null : null;
   const activeUrl = sourceMode === "search" ? selectedMedia?.url || "" : directUrl;
   const searchAvailable = platform === "YouTube";
@@ -785,7 +788,7 @@ function App() {
                     value={directUrl}
                     onChange={(event) => setDirectUrl(event.target.value)}
                     onKeyDown={(event) => event.key === "Enter" && directUrl.trim() && goNext()}
-                    placeholder="https://youtube.com/watch?v=..."
+                    placeholder={directUrlPlaceholder}
                   />
                   <button className="soft-button" onClick={pasteUrl} title="Colar URL">
                     <Clipboard size={17} /> Colar
