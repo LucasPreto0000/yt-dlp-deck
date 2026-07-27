@@ -5,11 +5,16 @@ TypeScript, Kotlin e Python.
 
 FEITO INTEIRAMENTE POR IA, ENTAO TERÁ BUGS!!!!
 
-## Usar
+## Downloads oficiais
 
-Instale pelo arquivo:
+- [Baixar para Windows (`yt-dlp-deck.exe`)](https://github.com/LucasPreto0000/yt-dlp-deck/releases/download/v1.0.0/yt-dlp-deck.exe)
+- [Baixar para Android ARM64 (`.apk`)](https://github.com/LucasPreto0000/yt-dlp-deck/releases/download/v1.0.0/YT-DLP-Deck-Android-v1.0.0-arm64.apk)
+- [Ver a release completa e as notas da versão](https://github.com/LucasPreto0000/yt-dlp-deck/releases/tag/v1.0.0)
 
-`src-tauri\target\release\bundle\nsis\YT-DLP Deck_1.0.0_x64-setup.exe`
+O APK é compatível com Android 7 ou superior em aparelhos ARM64. No Android,
+pode ser necessário permitir a instalação de aplicativos desconhecidos.
+
+## Usar no Windows
 
 Ao abrir, o aplicativo verifica se estes dois arquivos estão na mesma pasta do
 `yt-dlp-deck.exe`:
