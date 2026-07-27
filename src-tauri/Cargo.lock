@@ -4699,7 +4699,7 @@ dependencies = [
 
 [[package]]
 name = "yt-dlp-deck"
-version = "1.1.4"
+version = "1.1.5"
 dependencies = [
  "futures-util",
  "reqwest 0.12.28",

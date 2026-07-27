@@ -141,6 +141,24 @@ try {
         Set-Content -LiteralPath $generatedAppBuildFile -Value $updatedGeneratedAppBuild -Encoding utf8
     }
 
+    $androidIconSource = Join-Path $tauriRoot "icons\android"
+    $androidResourceDestination = Join-Path $androidRoot "app\src\main\res"
+    if (!(Test-Path -LiteralPath $androidIconSource)) {
+        throw "Os recursos do ícone Android não foram encontrados."
+    }
+    Copy-Item -Path (Join-Path $androidIconSource "*") `
+        -Destination $androidResourceDestination -Recurse -Force
+
+    $generatedManifestFile = Join-Path $androidRoot "app\src\main\AndroidManifest.xml"
+    $generatedManifest = Get-Content -Raw -LiteralPath $generatedManifestFile
+    if ($generatedManifest -notmatch 'android:roundIcon=') {
+        $updatedGeneratedManifest = $generatedManifest -replace (
+            'android:icon="@mipmap/ic_launcher"'
+        ), "android:icon=`"@mipmap/ic_launcher`"`r`n        android:roundIcon=`"@mipmap/ic_launcher_round`""
+        Set-Content -LiteralPath $generatedManifestFile `
+            -Value $updatedGeneratedManifest -Encoding utf8
+    }
+
     $verificationSource = Join-Path $tauriRoot "android\verification-metadata.xml"
     $verificationDirectory = Join-Path $androidRoot "gradle"
     if (!(Test-Path -LiteralPath $verificationSource)) {
