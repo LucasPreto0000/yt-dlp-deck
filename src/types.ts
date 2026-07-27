@@ -29,6 +29,7 @@ export interface DownloadResult {
   success: boolean;
   outputDir: string;
   message: string;
+  jobId?: string | null;
 }
 
 export interface DownloadRequest {
@@ -38,4 +39,53 @@ export interface DownloadRequest {
   quality: QualityId;
   cookies: CookieId;
   cookieFile: string | null;
+  wifiOnly?: boolean;
+}
+
+export type MobileDownloadStatus =
+  | "queued"
+  | "running"
+  | "paused"
+  | "processing"
+  | "saving"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface MobileDownloadRecord {
+  id: string;
+  title: string;
+  url: string;
+  status: MobileDownloadStatus;
+  percent: number;
+  message: string;
+  outputDir: string;
+  fileUri?: string | null;
+  fileName?: string | null;
+  createdAt: number;
+  updatedAt: number;
+  console: string[];
+}
+
+export interface MobileDownloadState {
+  active: boolean;
+  paused: boolean;
+  cancelled: boolean;
+  current?: MobileDownloadRecord | null;
+}
+
+export interface MobileDownloadHistory {
+  items: MobileDownloadRecord[];
+}
+
+export interface MobileSettings {
+  sharedUrl?: string | null;
+  downloadDirectory: string;
+  notificationsGranted: boolean;
+  storageGranted: boolean;
+}
+
+export interface MobileCookieFile {
+  path: string;
+  name: string;
 }

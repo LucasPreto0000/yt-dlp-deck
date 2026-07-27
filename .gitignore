@@ -5,6 +5,10 @@
 /src-tauri/gen
 /_run_temp.bat
 *.pdb
+*.jks
+*.keystore
+keystore.properties
+signing.properties
 
 # Ferramentas e artefatos grandes
 /ffmpeg.exe

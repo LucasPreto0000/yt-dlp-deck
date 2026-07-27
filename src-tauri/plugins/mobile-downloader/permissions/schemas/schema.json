@@ -307,6 +307,114 @@
           "markdownDescription": "Denies the check_tools command without any pre-configured scope."
         },
         {
+          "description": "Enables the choose_cookie_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-choose-cookie-file",
+          "markdownDescription": "Enables the choose_cookie_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the choose_cookie_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-choose-cookie-file",
+          "markdownDescription": "Denies the choose_cookie_file command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the choose_download_directory command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-choose-download-directory",
+          "markdownDescription": "Enables the choose_download_directory command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the choose_download_directory command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-choose-download-directory",
+          "markdownDescription": "Denies the choose_download_directory command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the clear_download_history command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-clear-download-history",
+          "markdownDescription": "Enables the clear_download_history command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the clear_download_history command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-clear-download-history",
+          "markdownDescription": "Denies the clear_download_history command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the control_download command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-control-download",
+          "markdownDescription": "Enables the control_download command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the control_download command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-control-download",
+          "markdownDescription": "Denies the control_download command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_download_item command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-download-item",
+          "markdownDescription": "Enables the delete_download_item command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_download_item command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-download-item",
+          "markdownDescription": "Denies the delete_download_item command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_download_history command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-download-history",
+          "markdownDescription": "Enables the get_download_history command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_download_history command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-download-history",
+          "markdownDescription": "Denies the get_download_history command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_download_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-download-state",
+          "markdownDescription": "Enables the get_download_state command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_download_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-download-state",
+          "markdownDescription": "Denies the get_download_state command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_mobile_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-mobile-settings",
+          "markdownDescription": "Enables the get_mobile_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_mobile_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-mobile-settings",
+          "markdownDescription": "Denies the get_mobile_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_download_item command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-download-item",
+          "markdownDescription": "Enables the open_download_item command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_download_item command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-download-item",
+          "markdownDescription": "Denies the open_download_item command without any pre-configured scope."
+        },
+        {
           "description": "Enables the open_downloads_folder command without any pre-configured scope.",
           "type": "string",
           "const": "allow-open-downloads-folder",
@@ -331,6 +439,18 @@
           "markdownDescription": "Denies the open_external_url command without any pre-configured scope."
         },
         {
+          "description": "Enables the request_mobile_permissions command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-request-mobile-permissions",
+          "markdownDescription": "Enables the request_mobile_permissions command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the request_mobile_permissions command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-request-mobile-permissions",
+          "markdownDescription": "Denies the request_mobile_permissions command without any pre-configured scope."
+        },
+        {
           "description": "Enables the search_videos command without any pre-configured scope.",
           "type": "string",
           "const": "allow-search-videos",
@@ -341,6 +461,18 @@
           "type": "string",
           "const": "deny-search-videos",
           "markdownDescription": "Denies the search_videos command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the share_download_item command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-share-download-item",
+          "markdownDescription": "Enables the share_download_item command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the share_download_item command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-share-download-item",
+          "markdownDescription": "Denies the share_download_item command without any pre-configured scope."
         },
         {
           "description": "Enables the start_download command without any pre-configured scope.",
@@ -355,10 +487,10 @@
           "markdownDescription": "Denies the start_download command without any pre-configured scope."
         },
         {
-          "description": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-check-tools`\n- `allow-search-videos`\n- `allow-start-download`\n- `allow-open-downloads-folder`\n- `allow-open-external-url`",
+          "description": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-check-tools`\n- `allow-search-videos`\n- `allow-start-download`\n- `allow-open-downloads-folder`\n- `allow-open-external-url`\n- `allow-control-download`\n- `allow-get-download-state`\n- `allow-get-download-history`\n- `allow-clear-download-history`\n- `allow-open-download-item`\n- `allow-share-download-item`\n- `allow-delete-download-item`\n- `allow-get-mobile-settings`\n- `allow-request-mobile-permissions`\n- `allow-choose-download-directory`\n- `allow-choose-cookie-file`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-check-tools`\n- `allow-search-videos`\n- `allow-start-download`\n- `allow-open-downloads-folder`\n- `allow-open-external-url`"
+          "markdownDescription": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-check-tools`\n- `allow-search-videos`\n- `allow-start-download`\n- `allow-open-downloads-folder`\n- `allow-open-external-url`\n- `allow-control-download`\n- `allow-get-download-state`\n- `allow-get-download-history`\n- `allow-clear-download-history`\n- `allow-open-download-item`\n- `allow-share-download-item`\n- `allow-delete-download-item`\n- `allow-get-mobile-settings`\n- `allow-request-mobile-permissions`\n- `allow-choose-download-directory`\n- `allow-choose-cookie-file`"
         }
       ]
     }

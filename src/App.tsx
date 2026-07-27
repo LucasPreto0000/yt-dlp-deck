@@ -32,19 +32,23 @@ import {
   MessageCircle,
   MonitorPlay,
   Music2,
+  Pause,
   Play,
   Radio,
   RotateCcw,
   Search,
   Settings2,
+  Share2,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   SquareTerminal,
+  Trash2,
   Twitter,
   UserRound,
   Video,
   WandSparkles,
+  Wifi,
   X,
   Youtube,
 } from "lucide-react";
@@ -53,12 +57,22 @@ import type {
   DownloadRequest,
   DownloadResult,
   FormatId,
+  MobileCookieFile,
+  MobileDownloadHistory,
+  MobileDownloadRecord,
+  MobileDownloadState,
+  MobileSettings,
   QualityId,
   SearchResult,
   SourceMode,
   ToolStatus,
 } from "./types";
-import { appInvoke, isAndroidRuntime, listenDownloadOutput } from "./nativeBridge";
+import {
+  appInvoke,
+  isAndroidRuntime,
+  listenDownloadOutput,
+  listenMobilePluginEvent,
+} from "./nativeBridge";
 import { startGpuBackdrop, type BackdropController } from "./visuals/gpuBackdrop";
 
 const transition = { type: "spring" as const, stiffness: 320, damping: 30 };
@@ -115,6 +129,17 @@ const qualities: Array<{ id: QualityId; label: string; detail: string }> = [
   { id: "720p", label: "HD", detail: "720p" },
   { id: "480p", label: "Compacto", detail: "480p" },
 ];
+
+const mobileStatusLabels: Record<string, string> = {
+  queued: "Na fila",
+  running: "Baixando",
+  paused: "Pausado",
+  processing: "Processando",
+  saving: "Salvando",
+  completed: "Concluído",
+  failed: "Falhou",
+  cancelled: "Cancelado",
+};
 
 const cookieOptions: Array<{
   id: CookieId;
@@ -430,12 +455,17 @@ function App() {
   const [quality, setQuality] = useState<QualityId>("best");
   const [cookies, setCookies] = useState<CookieId>("none");
   const [cookieFile, setCookieFile] = useState("");
+  const [wifiOnly, setWifiOnly] = useState(false);
   const [tools, setTools] = useState<ToolStatus | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [downloadPercent, setDownloadPercent] = useState(0);
   const [downloadLines, setDownloadLines] = useState<string[]>([]);
   const [downloadMessage, setDownloadMessage] = useState("");
   const [downloadError, setDownloadError] = useState("");
+  const [mobileDownloadState, setMobileDownloadState] = useState<MobileDownloadState | null>(null);
+  const [mobileHistory, setMobileHistory] = useState<MobileDownloadRecord[]>([]);
+  const [mobileSettings, setMobileSettings] = useState<MobileSettings | null>(null);
+  const [mobileActionBusy, setMobileActionBusy] = useState(false);
   const consoleRef = useRef<HTMLPreElement>(null);
   const downloadBufferRef = useRef<string[]>([]);
   const downloadPercentRef = useRef(0);
@@ -449,7 +479,7 @@ function App() {
   const selectedFormat = formats.find((item) => item.id === format);
   const selectedQuality = qualities.find((item) => item.id === quality);
   const availableCookieOptions = isAndroidRuntime
-    ? cookieOptions.filter((item) => item.id === "none")
+    ? cookieOptions.filter((item) => item.id === "none" || item.id === "file")
     : cookieOptions;
   const selectedCookie = availableCookieOptions.find((item) => item.id === cookies);
   const directUrlPlaceholder =
@@ -491,6 +521,43 @@ function App() {
           }
         }),
       );
+      if (isAndroidRuntime) {
+        unlisteners.push(
+          await listenMobilePluginEvent<MobileDownloadRecord>("download-state", (record) => {
+            if (!active) return;
+            const isActive = ["queued", "running", "paused", "processing", "saving"].includes(record.status);
+            setMobileDownloadState({
+              active: isActive,
+              paused: record.status === "paused",
+              cancelled: record.status === "cancelled",
+              current: record,
+            });
+            setDownloading(isActive);
+            setDownloadPercent(record.percent);
+            downloadPercentRef.current = record.percent;
+            if (record.console?.length) {
+              downloadBufferRef.current = record.console.slice(-300);
+              setDownloadLines([...downloadBufferRef.current]);
+            }
+            if (record.status === "completed") {
+              setDownloadMessage(`${record.message} Arquivo salvo em ${record.outputDir}`);
+              setDownloadError("");
+            } else if (record.status === "failed" || record.status === "cancelled") {
+              setDownloadError(record.message);
+            }
+            setMobileHistory((current) => [
+              record,
+              ...current.filter((item) => item.id !== record.id),
+            ].slice(0, 40));
+          }),
+        );
+        unlisteners.push(
+          await listenMobilePluginEvent<{ url?: string }>("shared-url", ({ url }) => {
+            if (active && url) applySharedUrl(url);
+          }),
+        );
+        void refreshMobileData();
+      }
     })();
     return () => {
       active = false;
@@ -533,12 +600,150 @@ function App() {
     if (consoleRef.current) consoleRef.current.scrollTop = consoleRef.current.scrollHeight;
   }, [downloadLines]);
 
+  useEffect(() => {
+    if (!isAndroidRuntime) return;
+    window.history.replaceState({ ...window.history.state, deckStep: 0 }, "");
+    const handlePopState = (event: PopStateEvent) => {
+      const target = Number(event.state?.deckStep);
+      if (Number.isInteger(target) && target >= 0 && target < steps.length) {
+        setPreviewMedia(null);
+        setStep(target);
+      }
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  useEffect(() => {
+    if (!isAndroidRuntime || window.history.state?.deckStep === step) return;
+    window.history.pushState({ ...window.history.state, deckStep: step }, "");
+  }, [step]);
+
   async function checkTools() {
     try {
       const status = await appInvoke<ToolStatus>("get_tool_status");
       setTools(status);
     } catch {
       setTools(null);
+    }
+  }
+
+  function applySharedUrl(url: string) {
+    let detected = "Outro";
+    try {
+      const host = new URL(url).hostname.toLowerCase();
+      if (host.includes("youtube.com") || host === "youtu.be") detected = "YouTube";
+      else if (host.includes("instagram.com")) detected = "Instagram";
+      else if (host.includes("tiktok.com")) detected = "TikTok";
+      else if (host === "x.com" || host.endsWith(".x.com") || host.includes("twitter.com")) detected = "X_Twitter";
+      else if (host.includes("twitch.tv")) detected = "Twitch";
+      else if (host.includes("reddit.com") || host === "redd.it") detected = "Reddit";
+    } catch {
+      return;
+    }
+    setPlatform(detected);
+    setPlatformFolder(detected === "Outro" ? "Outro" : detected);
+    setSourceMode("url");
+    setDirectUrl(url);
+    setSearchError("");
+    setStep(1);
+  }
+
+  async function refreshMobileData() {
+    if (!isAndroidRuntime) return;
+    try {
+      const [state, history, settings] = await Promise.all([
+        appInvoke<MobileDownloadState>("get_download_state"),
+        appInvoke<MobileDownloadHistory>("get_download_history"),
+        appInvoke<MobileSettings>("get_mobile_settings"),
+      ]);
+      setMobileDownloadState(state);
+      setMobileHistory(history.items || []);
+      setMobileSettings(settings);
+      if (settings.sharedUrl) applySharedUrl(settings.sharedUrl);
+      if (state.current) {
+        setDownloading(state.active);
+        setDownloadPercent(state.current.percent);
+        downloadPercentRef.current = state.current.percent;
+        downloadBufferRef.current = (state.current.console || []).slice(-300);
+        setDownloadLines([...downloadBufferRef.current]);
+      }
+    } catch (error) {
+      setDownloadError(errorText(error));
+    }
+  }
+
+  async function controlMobileDownload(action: "pause" | "resume" | "cancel") {
+    if (!isAndroidRuntime || mobileActionBusy) return;
+    setMobileActionBusy(true);
+    try {
+      const state = await appInvoke<MobileDownloadState>("control_download", { action });
+      setMobileDownloadState(state);
+      setDownloading(state.active);
+    } catch (error) {
+      setDownloadError(errorText(error));
+    } finally {
+      setMobileActionBusy(false);
+    }
+  }
+
+  async function chooseMobileDownloadDirectory() {
+    if (!isAndroidRuntime || mobileActionBusy) return;
+    setMobileActionBusy(true);
+    try {
+      const settings = await appInvoke<MobileSettings>("choose_download_directory");
+      setMobileSettings(settings);
+    } catch (error) {
+      setDownloadError(errorText(error));
+    } finally {
+      setMobileActionBusy(false);
+    }
+  }
+
+  async function chooseMobileCookieFile() {
+    if (!isAndroidRuntime || mobileActionBusy) return;
+    setMobileActionBusy(true);
+    try {
+      const selected = await appInvoke<MobileCookieFile>("choose_cookie_file");
+      setCookieFile(selected.path);
+      setCookies("file");
+    } catch (error) {
+      setDownloadError(errorText(error));
+    } finally {
+      setMobileActionBusy(false);
+    }
+  }
+
+  async function mobileHistoryAction(
+    command: "open_download_item" | "share_download_item" | "delete_download_item",
+    id: string,
+  ) {
+    if (!isAndroidRuntime || mobileActionBusy) return;
+    setMobileActionBusy(true);
+    try {
+      await appInvoke(command, { id });
+      if (command === "delete_download_item") {
+        setMobileHistory((current) => current.filter((item) => item.id !== id));
+      }
+    } catch (error) {
+      setDownloadError(errorText(error));
+    } finally {
+      setMobileActionBusy(false);
+    }
+  }
+
+  async function clearMobileHistory() {
+    if (!isAndroidRuntime || mobileActionBusy) return;
+    setMobileActionBusy(true);
+    try {
+      await appInvoke("clear_download_history");
+      setMobileHistory((current) =>
+        current.filter((item) => ["queued", "running", "paused", "processing", "saving"].includes(item.status)),
+      );
+    } catch (error) {
+      setDownloadError(errorText(error));
+    } finally {
+      setMobileActionBusy(false);
     }
   }
 
@@ -609,6 +814,21 @@ function App() {
 
   async function startDownload() {
     if (!format || downloading) return;
+    if (isAndroidRuntime) {
+      setMobileActionBusy(true);
+      try {
+        const settings = await appInvoke<MobileSettings>("request_mobile_permissions");
+        setMobileSettings(settings);
+        if (!settings.storageGranted) {
+          throw new Error("Permita o acesso ao armazenamento para salvar o download.");
+        }
+      } catch (error) {
+        setDownloadError(errorText(error));
+        setMobileActionBusy(false);
+        return;
+      }
+      setMobileActionBusy(false);
+    }
     setDownloading(true);
     setDownloadPercent(0);
     setDownloadLines([]);
@@ -623,6 +843,7 @@ function App() {
       quality,
       cookies,
       cookieFile: cookieFile.trim() || null,
+      wifiOnly: isAndroidRuntime && wifiOnly,
     };
     try {
       const result = await appInvoke<DownloadResult>("start_download", { request });
@@ -1002,18 +1223,60 @@ function App() {
                   exit={{ opacity: 0, height: 0 }}
                 >
                   <label htmlFor="cookie-file-path">
-                    <FileText size={14} /> Caminho do cookies.txt
+                    <FileText size={14} /> {isAndroidRuntime ? "Arquivo cookies.txt" : "Caminho do cookies.txt"}
                   </label>
-                  <input
-                    id="cookie-file-path"
-                    value={cookieFile}
-                    onChange={(event) => setCookieFile(event.target.value)}
-                    placeholder="C:\caminho\cookies.txt"
-                  />
+                  {isAndroidRuntime ? (
+                    <button
+                      id="cookie-file-path"
+                      type="button"
+                      className="mobile-file-picker"
+                      onClick={chooseMobileCookieFile}
+                      disabled={mobileActionBusy}
+                    >
+                      <FileText size={16} />
+                      {cookieFile ? "cookies.txt importado · trocar arquivo" : "Selecionar cookies.txt"}
+                    </button>
+                  ) : (
+                    <input
+                      id="cookie-file-path"
+                      value={cookieFile}
+                      onChange={(event) => setCookieFile(event.target.value)}
+                      placeholder="C:\caminho\cookies.txt"
+                    />
+                  )}
                 </motion.div>
               )}
             </AnimatePresence>
           </section>
+          {isAndroidRuntime && (
+            <section className="settings-panel mobile-network-panel">
+              <div className="panel-heading">
+                <span>
+                  <Wifi size={19} />
+                </span>
+                <div>
+                  <strong>Rede e bateria</strong>
+                  <small>Controle o consumo de dados móveis</small>
+                </div>
+              </div>
+              <button
+                type="button"
+                className={`mobile-setting-toggle ${wifiOnly ? "is-active" : ""}`}
+                role="switch"
+                aria-checked={wifiOnly}
+                onClick={() => setWifiOnly((current) => !current)}
+              >
+                <span>
+                  <Wifi size={17} />
+                  <span>
+                    <strong>Baixar somente por Wi-Fi</strong>
+                    <small>Bloqueia o início em redes móveis</small>
+                  </span>
+                </span>
+                <i />
+              </button>
+            </section>
+          )}
         </div>
       </>
     );
@@ -1086,6 +1349,37 @@ function App() {
             <button className="folder-button" onClick={openFolder}>
               <FolderOpen size={19} /> Abrir pasta
             </button>
+            {isAndroidRuntime && (
+              <button
+                className="folder-button"
+                onClick={chooseMobileDownloadDirectory}
+                disabled={mobileActionBusy || downloading}
+                title={mobileSettings?.downloadDirectory || "Escolher pasta de destino"}
+              >
+                <Settings2 size={18} /> Escolher pasta
+              </button>
+            )}
+            {isAndroidRuntime && downloading && (
+              <>
+                <button
+                  className="folder-button mobile-control-button"
+                  onClick={() =>
+                    controlMobileDownload(mobileDownloadState?.paused ? "resume" : "pause")
+                  }
+                  disabled={mobileActionBusy}
+                >
+                  {mobileDownloadState?.paused ? <Play size={18} /> : <Pause size={18} />}
+                  {mobileDownloadState?.paused ? "Retomar" : "Pausar"}
+                </button>
+                <button
+                  className="folder-button mobile-control-button is-danger"
+                  onClick={() => controlMobileDownload("cancel")}
+                  disabled={mobileActionBusy}
+                >
+                  <X size={18} /> Cancelar
+                </button>
+              </>
+            )}
           </div>
           {(downloading || downloadLines.length > 0 || downloadMessage || downloadError) && (
             <motion.div
@@ -1116,13 +1410,71 @@ function App() {
               )}
               {downloadError && <InlineError message={downloadError} />}
               {downloadLines.length > 0 && (
-                <pre className="live-console" ref={consoleRef}>
-                  {downloadLines.join("\n")}
-                </pre>
+                <div className="live-console-shell">
+                  <div className="live-console-head">
+                    <span><SquareTerminal size={14} /> console yt-dlp + FFmpeg</span>
+                    <small>{isAndroidRuntime ? "Android nativo" : "Windows nativo"}</small>
+                  </div>
+                  <pre className="live-console" ref={consoleRef}>
+                    {downloadLines.join("\n")}
+                  </pre>
+                </div>
               )}
             </motion.div>
           )}
         </section>
+        {isAndroidRuntime && (
+          <section className="mobile-download-library">
+            <div className="mobile-library-head">
+              <div>
+                <span>Biblioteca Android</span>
+                <small>Histórico persistente de downloads</small>
+              </div>
+              {mobileHistory.length > 0 && (
+                <button onClick={clearMobileHistory} disabled={mobileActionBusy}>
+                  <Trash2 size={15} /> Limpar finalizados
+                </button>
+              )}
+            </div>
+            {mobileHistory.length === 0 ? (
+              <div className="mobile-library-empty">
+                Seus downloads concluídos aparecerão aqui.
+              </div>
+            ) : (
+              <div className="mobile-history-list">
+                {mobileHistory.slice(0, 12).map((item) => (
+                  <article className={`mobile-history-item status-${item.status}`} key={item.id}>
+                    <div className="mobile-history-main">
+                      <strong>{item.title || item.fileName || "Download"}</strong>
+                      <span>{mobileStatusLabels[item.status] || item.status} · {Math.round(item.percent)}%</span>
+                      <small>{item.message}</small>
+                    </div>
+                    <div className="mobile-history-actions">
+                      {item.status === "completed" && item.fileUri && (
+                        <>
+                          <button onClick={() => mobileHistoryAction("open_download_item", item.id)}>
+                            <Play size={14} /> Abrir
+                          </button>
+                          <button onClick={() => mobileHistoryAction("share_download_item", item.id)}>
+                            <Share2 size={14} /> Compartilhar
+                          </button>
+                        </>
+                      )}
+                      {!["queued", "running", "paused", "processing", "saving"].includes(item.status) && (
+                        <button
+                          className="is-danger"
+                          onClick={() => mobileHistoryAction("delete_download_item", item.id)}
+                        >
+                          <Trash2 size={14} /> Excluir
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
       </>
     );
   }

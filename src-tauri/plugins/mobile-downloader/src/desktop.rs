@@ -36,4 +36,60 @@ impl<R: Runtime> MobileDownloader<R> {
     pub fn open_external_url(&self, _payload: OpenUrlRequest) -> crate::Result<EmptyResponse> {
         Err(crate::Error::Unsupported)
     }
+
+    pub fn control_download(
+        &self,
+        _payload: DownloadControlRequest,
+    ) -> crate::Result<DownloadStateResponse> {
+        Err(crate::Error::Unsupported)
+    }
+
+    pub fn get_download_state(&self) -> crate::Result<DownloadStateResponse> {
+        Err(crate::Error::Unsupported)
+    }
+
+    pub fn get_download_history(&self) -> crate::Result<DownloadHistoryResponse> {
+        Err(crate::Error::Unsupported)
+    }
+
+    pub fn clear_download_history(&self) -> crate::Result<EmptyResponse> {
+        Err(crate::Error::Unsupported)
+    }
+
+    pub fn open_download_item(
+        &self,
+        _payload: DownloadItemRequest,
+    ) -> crate::Result<EmptyResponse> {
+        Err(crate::Error::Unsupported)
+    }
+
+    pub fn share_download_item(
+        &self,
+        _payload: DownloadItemRequest,
+    ) -> crate::Result<EmptyResponse> {
+        Err(crate::Error::Unsupported)
+    }
+
+    pub fn delete_download_item(
+        &self,
+        _payload: DownloadItemRequest,
+    ) -> crate::Result<EmptyResponse> {
+        Err(crate::Error::Unsupported)
+    }
+
+    pub fn get_mobile_settings(&self) -> crate::Result<MobileSettingsResponse> {
+        Err(crate::Error::Unsupported)
+    }
+
+    pub fn request_mobile_permissions(&self) -> crate::Result<MobileSettingsResponse> {
+        Err(crate::Error::Unsupported)
+    }
+
+    pub fn choose_download_directory(&self) -> crate::Result<MobileSettingsResponse> {
+        Err(crate::Error::Unsupported)
+    }
+
+    pub fn choose_cookie_file(&self) -> crate::Result<CookieFileResponse> {
+        Err(crate::Error::Unsupported)
+    }
 }

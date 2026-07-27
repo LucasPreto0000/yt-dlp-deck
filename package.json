@@ -1,7 +1,7 @@
 {
   "name": "yt-dlp-deck",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Interface desktop para yt-dlp, construída com Tauri e Rust",
   "scripts": {
     "tauri": "tauri",
@@ -13,7 +13,8 @@
     "desktop:build": "tauri build",
     "android:init": "tauri android init",
     "android:dev": "tauri android dev",
-    "android:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android.ps1"
+    "android:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android.ps1",
+    "android:bundle": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android.ps1 -Bundle"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",

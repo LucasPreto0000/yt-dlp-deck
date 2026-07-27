@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-choose-cookie-file"
+description = "Enables the choose_cookie_file command without any pre-configured scope."
+commands.allow = ["choose_cookie_file"]
+
+[[permission]]
+identifier = "deny-choose-cookie-file"
+description = "Denies the choose_cookie_file command without any pre-configured scope."
+commands.deny = ["choose_cookie_file"]

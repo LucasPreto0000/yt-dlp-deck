@@ -1399,6 +1399,81 @@ input:focus {
   background: linear-gradient(145deg, rgba(20, 22, 31, 0.88), rgba(11, 13, 19, 0.92));
 }
 
+.mobile-network-panel {
+  grid-column: 1 / -1;
+}
+
+.mobile-setting-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 58px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.mobile-setting-toggle > span {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+}
+
+.mobile-setting-toggle > span > svg {
+  color: var(--orange-light);
+}
+
+.mobile-setting-toggle strong,
+.mobile-setting-toggle small {
+  display: block;
+}
+
+.mobile-setting-toggle strong {
+  color: #eef4ff;
+  font-size: 10px;
+}
+
+.mobile-setting-toggle small {
+  margin-top: 4px;
+  color: var(--dim);
+  font-size: 8px;
+}
+
+.mobile-setting-toggle > i {
+  position: relative;
+  width: 38px;
+  height: 22px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.mobile-setting-toggle > i::after {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--dim);
+  content: "";
+  transition: transform 180ms ease, background 180ms ease;
+}
+
+.mobile-setting-toggle.is-active {
+  border-color: rgba(56, 232, 162, 0.22);
+  background: rgba(56, 232, 162, 0.04);
+}
+
+.mobile-setting-toggle.is-active > i::after {
+  background: var(--green);
+  transform: translateX(16px);
+}
+
 .panel-heading {
   display: flex;
   align-items: center;
@@ -1546,6 +1621,21 @@ input:focus {
 .cookie-file input {
   height: 42px;
   font-size: 10px;
+}
+
+.mobile-file-picker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid rgba(56, 232, 162, 0.18);
+  border-radius: 10px;
+  color: #a7eccf;
+  background: rgba(56, 232, 162, 0.04);
+  font-size: 10px;
+  font-weight: 800;
 }
 
 .audio-quality-message {
@@ -1833,14 +1923,168 @@ input:focus {
 .live-console {
   max-height: 170px;
   overflow: auto;
-  margin: 11px 0 0;
+  margin: 0;
   padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
+  border: 0;
   color: #75c99e;
   background: #07090b;
   font: 8px/1.6 "Cascadia Code", Consolas, monospace;
   white-space: pre-wrap;
+}
+
+.live-console-shell {
+  overflow: hidden;
+  margin-top: 11px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: #07090b;
+}
+
+.live-console-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.025);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.live-console-head span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.live-console-head svg {
+  color: var(--green);
+}
+
+.live-console-head small {
+  color: var(--dim);
+  font-size: inherit;
+}
+
+.mobile-control-button.is-danger,
+.mobile-history-actions .is-danger {
+  border-color: rgba(255, 91, 112, 0.22);
+  color: #ff8797;
+  background: rgba(255, 91, 112, 0.06);
+}
+
+.mobile-download-library {
+  margin-top: 16px;
+  padding: 17px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(12, 16, 20, 0.76);
+  box-shadow: var(--shadow-soft);
+}
+
+.mobile-library-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 13px;
+}
+
+.mobile-library-head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.mobile-library-head span {
+  color: #f3f7ff;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.mobile-library-head small,
+.mobile-library-empty {
+  color: var(--dim);
+  font-size: 9px;
+}
+
+.mobile-library-head button,
+.mobile-history-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.025);
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.mobile-history-list {
+  display: grid;
+  gap: 9px;
+}
+
+.mobile-history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.mobile-history-item.status-completed {
+  border-color: rgba(56, 232, 162, 0.16);
+}
+
+.mobile-history-item.status-failed,
+.mobile-history-item.status-cancelled {
+  border-color: rgba(255, 91, 112, 0.16);
+}
+
+.mobile-history-main {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.mobile-history-main strong,
+.mobile-history-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-history-main strong {
+  color: #eef4ff;
+  font-size: 10px;
+}
+
+.mobile-history-main span {
+  color: var(--orange-light);
+  font-size: 8px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.mobile-history-main small {
+  color: var(--dim);
+  font-size: 8px;
+}
+
+.mobile-history-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
 }
 
 .transport {
@@ -2296,6 +2540,45 @@ input {
   button,
   [role="button"] {
     touch-action: manipulation;
+  }
+
+  .live-console {
+    max-height: 240px;
+    font-size: 10px;
+  }
+
+  .mobile-library-head span,
+  .mobile-history-main strong {
+    font-size: 12px;
+  }
+
+  .mobile-library-head small,
+  .mobile-history-main small,
+  .mobile-history-main span,
+  .mobile-library-head button,
+  .mobile-history-actions button {
+    font-size: 10px;
+  }
+}
+
+@media (max-width: 620px) {
+  .mobile-library-head,
+  .mobile-history-item {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .mobile-library-head button {
+    width: 100%;
+  }
+
+  .mobile-history-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .mobile-history-actions button:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
   }
 }
 

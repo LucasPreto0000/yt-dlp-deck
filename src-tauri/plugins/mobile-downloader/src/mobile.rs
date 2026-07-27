@@ -58,4 +58,79 @@ impl<R: Runtime> MobileDownloader<R> {
             .run_mobile_plugin("openExternalUrl", payload)
             .map_err(Into::into)
     }
+
+    pub fn control_download(
+        &self,
+        payload: DownloadControlRequest,
+    ) -> crate::Result<DownloadStateResponse> {
+        self.0
+            .run_mobile_plugin("controlDownload", payload)
+            .map_err(Into::into)
+    }
+
+    pub fn get_download_state(&self) -> crate::Result<DownloadStateResponse> {
+        self.0
+            .run_mobile_plugin("getDownloadState", ())
+            .map_err(Into::into)
+    }
+
+    pub fn get_download_history(&self) -> crate::Result<DownloadHistoryResponse> {
+        self.0
+            .run_mobile_plugin("getDownloadHistory", ())
+            .map_err(Into::into)
+    }
+
+    pub fn clear_download_history(&self) -> crate::Result<EmptyResponse> {
+        self.0
+            .run_mobile_plugin("clearDownloadHistory", ())
+            .map_err(Into::into)
+    }
+
+    pub fn open_download_item(&self, payload: DownloadItemRequest) -> crate::Result<EmptyResponse> {
+        self.0
+            .run_mobile_plugin("openDownloadItem", payload)
+            .map_err(Into::into)
+    }
+
+    pub fn share_download_item(
+        &self,
+        payload: DownloadItemRequest,
+    ) -> crate::Result<EmptyResponse> {
+        self.0
+            .run_mobile_plugin("shareDownloadItem", payload)
+            .map_err(Into::into)
+    }
+
+    pub fn delete_download_item(
+        &self,
+        payload: DownloadItemRequest,
+    ) -> crate::Result<EmptyResponse> {
+        self.0
+            .run_mobile_plugin("deleteDownloadItem", payload)
+            .map_err(Into::into)
+    }
+
+    pub fn get_mobile_settings(&self) -> crate::Result<MobileSettingsResponse> {
+        self.0
+            .run_mobile_plugin("getMobileSettings", ())
+            .map_err(Into::into)
+    }
+
+    pub fn request_mobile_permissions(&self) -> crate::Result<MobileSettingsResponse> {
+        self.0
+            .run_mobile_plugin("requestMobilePermissions", ())
+            .map_err(Into::into)
+    }
+
+    pub fn choose_download_directory(&self) -> crate::Result<MobileSettingsResponse> {
+        self.0
+            .run_mobile_plugin("chooseDownloadDirectory", ())
+            .map_err(Into::into)
+    }
+
+    pub fn choose_cookie_file(&self) -> crate::Result<CookieFileResponse> {
+        self.0
+            .run_mobile_plugin("chooseCookieFile", ())
+            .map_err(Into::into)
+    }
 }

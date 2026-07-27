@@ -7,6 +7,17 @@ const mobileCommands: Record<string, string> = {
   start_download: "start_download",
   open_downloads_folder: "open_downloads_folder",
   open_external_url: "open_external_url",
+  control_download: "control_download",
+  get_download_state: "get_download_state",
+  get_download_history: "get_download_history",
+  clear_download_history: "clear_download_history",
+  open_download_item: "open_download_item",
+  share_download_item: "share_download_item",
+  delete_download_item: "delete_download_item",
+  get_mobile_settings: "get_mobile_settings",
+  request_mobile_permissions: "request_mobile_permissions",
+  choose_download_directory: "choose_download_directory",
+  choose_cookie_file: "choose_cookie_file",
 };
 
 export const isAndroidRuntime =
@@ -36,4 +47,15 @@ export async function listenDownloadOutput(
     };
   }
   return listen<string>("download-output", ({ payload }) => callback(String(payload || "")));
+}
+
+export async function listenMobilePluginEvent<T>(
+  event: "download-state" | "shared-url",
+  callback: (payload: T) => void,
+): Promise<() => void> {
+  if (!isAndroidRuntime) return () => undefined;
+  const listener = await addPluginListener<T>("mobile-downloader", event, callback);
+  return () => {
+    void listener.unregister();
+  };
 }

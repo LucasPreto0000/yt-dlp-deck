@@ -5,6 +5,28 @@ import os
 from yt_dlp import YoutubeDL
 
 
+class _MobileLogger:
+    def __init__(self, callback):
+        self.callback = callback
+
+    def debug(self, message):
+        self._send(message)
+
+    def info(self, message):
+        self._send(message)
+
+    def warning(self, message):
+        self._send(f"WARNING: {message}")
+
+    def error(self, message):
+        self._send(f"ERROR: {message}")
+
+    def _send(self, message):
+        text = str(message or "").strip()
+        if text:
+            self.callback.onLog(text)
+
+
 def _duration_text(seconds):
     if not seconds:
         return "duração indisponível"
@@ -76,6 +98,8 @@ def _selector(media_format, quality):
         return "bestaudio/best"
     if media_format == "mp4":
         return (
+            f"bestvideo[ext=mp4][vcodec^=avc1]{height_filter}+"
+            f"bestaudio[ext=m4a][acodec^=mp4a]/"
             f"bestvideo[ext=mp4]{height_filter}+bestaudio[ext=m4a]/"
             f"best[ext=mp4]{height_filter}/best"
         )
@@ -89,6 +113,7 @@ def _selector(media_format, quality):
 
 def _progress_hook(callback):
     def hook(status):
+        callback.checkpoint()
         state = status.get("status")
         if state == "downloading":
             percent = str(status.get("_percent_str") or "").strip()
@@ -103,22 +128,41 @@ def _progress_hook(callback):
     return hook
 
 
-def download(url, work_dir, media_format, quality, callback):
+def download(
+    url,
+    work_dir,
+    media_format,
+    quality,
+    concurrent_fragments,
+    cookie_file,
+    callback,
+):
     os.makedirs(work_dir, exist_ok=True)
     options = {
-        "allow_unplayable_formats": True,
-        "concurrent_fragment_downloads": 4,
+        "concurrent_fragment_downloads": max(1, min(int(concurrent_fragments), 4)),
+        "continuedl": True,
         "format": _selector(media_format, quality),
+        "logger": _MobileLogger(callback),
+        "nopart": False,
         "noplaylist": True,
         "outtmpl": os.path.join(work_dir, "%(title).150B [%(id)s].%(ext)s"),
-        "overwrites": True,
+        "overwrites": False,
         "progress_hooks": [_progress_hook(callback)],
         "quiet": True,
         "retries": 5,
+        "fragment_retries": 5,
         "socket_timeout": 20,
         "trim_file_name": 180,
     }
+    if cookie_file and os.path.isfile(cookie_file):
+        options["cookiefile"] = cookie_file
+
+    callback.onLog(f"[sistema] Destino temporário: {work_dir}")
+    callback.onLog(
+        f"[sistema] Fragmentos simultâneos: {options['concurrent_fragment_downloads']}"
+    )
     with YoutubeDL(options) as ydl:
+        callback.checkpoint()
         info = ydl.extract_info(url, download=True)
 
     downloads = info.get("requested_downloads") or []

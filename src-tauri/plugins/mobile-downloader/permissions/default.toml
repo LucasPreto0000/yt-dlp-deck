@@ -5,5 +5,16 @@ permissions = [
   "allow-search-videos",
   "allow-start-download",
   "allow-open-downloads-folder",
-  "allow-open-external-url"
+  "allow-open-external-url",
+  "allow-control-download",
+  "allow-get-download-state",
+  "allow-get-download-history",
+  "allow-clear-download-history",
+  "allow-open-download-item",
+  "allow-share-download-item",
+  "allow-delete-download-item",
+  "allow-get-mobile-settings",
+  "allow-request-mobile-permissions",
+  "allow-choose-download-directory",
+  "allow-choose-cookie-file"
 ]

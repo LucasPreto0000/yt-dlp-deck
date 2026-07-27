@@ -11,7 +11,7 @@ android {
     defaultConfig {
         minSdk = 24
         ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")
+            abiFilters += listOf("arm64-v8a")
         }
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -41,12 +41,15 @@ chaquopy {
         version = "3.14"
         pip {
             install("yt-dlp==2026.7.4")
+            install("yt-dlp-ejs==0.8.0")
         }
     }
 }
 
 dependencies {
+    implementation("androidx.activity:activity-ktx:1.10.1")
     implementation("androidx.core:core-ktx:1.16.0")
+    implementation("androidx.documentfile:documentfile:1.1.0")
     implementation("dev.ffmpegkit-maintained:ffmpeg-kit-full:8.1.7")
     implementation("com.arthenica:smart-exception-java:0.2.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")

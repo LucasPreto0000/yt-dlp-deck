@@ -41,6 +41,8 @@ pub struct DownloadRequest {
     pub quality: Option<String>,
     pub cookies: String,
     pub cookie_file: Option<String>,
+    #[serde(default)]
+    pub wifi_only: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -55,6 +57,67 @@ pub struct DownloadResult {
     pub success: bool,
     pub output_dir: String,
     pub message: String,
+    pub job_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadControlRequest {
+    pub action: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadRecord {
+    pub id: String,
+    pub title: String,
+    pub url: String,
+    pub status: String,
+    pub percent: f64,
+    pub message: String,
+    pub output_dir: String,
+    pub file_uri: Option<String>,
+    pub file_name: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub console: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadHistoryResponse {
+    pub items: Vec<DownloadRecord>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadStateResponse {
+    pub active: bool,
+    pub paused: bool,
+    pub cancelled: bool,
+    pub current: Option<DownloadRecord>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MobileSettingsResponse {
+    pub shared_url: Option<String>,
+    pub download_directory: String,
+    pub notifications_granted: bool,
+    pub storage_granted: bool,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CookieFileResponse {
+    pub path: String,
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadItemRequest {
+    pub id: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
