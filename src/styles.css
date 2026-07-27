@@ -817,6 +817,15 @@ input:focus {
   cursor: var(--cursor-default);
 }
 
+.source-tabs.is-single {
+  grid-template-columns: 1fr;
+  width: 100%;
+}
+
+.source-tabs.is-single .tab-indicator {
+  width: calc(100% - 8px);
+}
+
 .source-search-note {
   display: flex;
   align-items: center;
@@ -2099,6 +2108,14 @@ input:focus {
 .back-button {
   justify-self: start;
   height: 43px;
+}
+
+.review-back-button {
+  position: sticky;
+  z-index: 20;
+  top: 12px;
+  margin: -2px 0 17px;
+  box-shadow: 0 10px 28px rgba(5, 6, 10, 0.38);
 }
 
 .next-button {

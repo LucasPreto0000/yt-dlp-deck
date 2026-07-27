@@ -1051,7 +1051,11 @@ function App() {
           description="Cole um link direto ou pesquise pelo nome. Na pesquisa, cada resultado aparece com sua capa para você escolher com segurança."
           icon={WandSparkles}
         />
-        <div className="source-tabs" role="tablist" aria-label="Forma de escolher o conteúdo">
+        <div
+          className={`source-tabs ${searchAvailable ? "" : "is-single"}`}
+          role="tablist"
+          aria-label="Forma de escolher o conteúdo"
+        >
           <button
             type="button"
             role="tab"
@@ -1062,18 +1066,19 @@ function App() {
           >
             <Link2 size={16} /> Link direto
           </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={sourceMode === "search"}
-            aria-controls="source-search-panel"
-            className={sourceMode === "search" ? "is-active" : ""}
-            onClick={() => setSourceMode("search")}
-            disabled={!searchAvailable}
-            title={searchAvailable ? "Pesquisar no YouTube" : "A pesquisa por nome está disponível para YouTube"}
-          >
-            <Search size={16} /> Pesquisar vídeo
-          </button>
+          {searchAvailable && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={sourceMode === "search"}
+              aria-controls="source-search-panel"
+              className={sourceMode === "search" ? "is-active" : ""}
+              onClick={() => setSourceMode("search")}
+              title="Pesquisar no YouTube"
+            >
+              <Search size={16} /> Pesquisar vídeo
+            </button>
+          )}
           <motion.span
             className="tab-indicator"
             animate={{ x: sourceMode === "url" ? 0 : "100%" }}
@@ -1436,6 +1441,13 @@ function App() {
           description="Revise tudo e acompanhe o progresso sem sair do aplicativo."
           icon={HardDriveDownload}
         />
+        <button
+          type="button"
+          className="back-button review-back-button"
+          onClick={() => setStep(3)}
+        >
+          <ArrowLeft size={17} /> Voltar para ajustes
+        </button>
         <div className="review-grid">
           <section className="review-panel">
             {chosenMedia && (
