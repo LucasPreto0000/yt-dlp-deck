@@ -1,0 +1,9 @@
+[default]
+description = "Default permissions for the plugin"
+permissions = [
+  "allow-check-tools",
+  "allow-search-videos",
+  "allow-start-download",
+  "allow-open-downloads-folder",
+  "allow-open-external-url"
+]

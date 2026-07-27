@@ -672,6 +672,7 @@ fn hide_console(_command: &mut Command) {}
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_mobile_downloader::init())
         .invoke_handler(tauri::generate_handler![
             ensure_tools,
             get_tool_status,

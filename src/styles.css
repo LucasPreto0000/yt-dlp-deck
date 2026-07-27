@@ -2284,6 +2284,45 @@ input {
   }
 }
 
+@media (pointer: coarse) {
+  *,
+  button,
+  input,
+  textarea,
+  pre {
+    cursor: auto !important;
+  }
+
+  button,
+  [role="button"] {
+    touch-action: manipulation;
+  }
+}
+
+@supports (padding: env(safe-area-inset-top)) {
+  @media (max-width: 820px) {
+    .app-shell {
+      grid-template-rows:
+        calc(68px + env(safe-area-inset-top))
+        74px
+        minmax(0, 1fr);
+    }
+
+    .topbar {
+      padding-top: env(safe-area-inset-top);
+    }
+
+    .main-stage {
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+
+    .video-preview-backdrop {
+      padding-top: max(14px, env(safe-area-inset-top));
+      padding-bottom: max(14px, env(safe-area-inset-bottom));
+    }
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

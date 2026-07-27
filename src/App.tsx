@@ -1,6 +1,4 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import {
   Activity,
@@ -60,6 +58,7 @@ import type {
   SourceMode,
   ToolStatus,
 } from "./types";
+import { appInvoke, isAndroidRuntime, listenDownloadOutput } from "./nativeBridge";
 import { startGpuBackdrop, type BackdropController } from "./visuals/gpuBackdrop";
 
 const transition = { type: "spring" as const, stiffness: 320, damping: 30 };
@@ -448,7 +447,10 @@ function App() {
 
   const selectedFormat = formats.find((item) => item.id === format);
   const selectedQuality = qualities.find((item) => item.id === quality);
-  const selectedCookie = cookieOptions.find((item) => item.id === cookies);
+  const availableCookieOptions = isAndroidRuntime
+    ? cookieOptions.filter((item) => item.id === "none")
+    : cookieOptions;
+  const selectedCookie = availableCookieOptions.find((item) => item.id === cookies);
   const selectedMedia = selectedResult !== null ? results[selectedResult] ?? null : null;
   const activeUrl = sourceMode === "search" ? selectedMedia?.url || "" : directUrl;
   const searchAvailable = platform === "YouTube";
@@ -468,7 +470,7 @@ function App() {
     void checkTools();
     void (async () => {
       unlisteners.push(
-        await listen<string>("download-output", ({ payload }) => {
+        await listenDownloadOutput((payload) => {
           if (!active) return;
           const line = String(payload || "");
           downloadBufferRef.current.push(line);
@@ -530,7 +532,7 @@ function App() {
 
   async function checkTools() {
     try {
-      const status = await invoke<ToolStatus>("get_tool_status");
+      const status = await appInvoke<ToolStatus>("get_tool_status");
       setTools(status);
     } catch {
       setTools(null);
@@ -568,7 +570,7 @@ function App() {
     setSelectedResult(null);
     setPreviewMedia(null);
     try {
-      const items = await invoke<SearchResult[]>("search_videos", { query: searchQuery.trim() });
+      const items = await appInvoke<SearchResult[]>("search_videos", { query: searchQuery.trim() });
       if (requestId !== searchRequestRef.current) return;
       setResults(items);
     } catch (error) {
@@ -596,7 +598,7 @@ function App() {
   async function openPreviewInBrowser() {
     if (!previewMedia) return;
     try {
-      await invoke("open_external_url", { url: previewMedia.url });
+      await appInvoke("open_external_url", { url: previewMedia.url });
     } catch (error) {
       setSearchError(`Não foi possível abrir o navegador: ${errorText(error)}`);
     }
@@ -620,7 +622,7 @@ function App() {
       cookieFile: cookieFile.trim() || null,
     };
     try {
-      const result = await invoke<DownloadResult>("start_download", { request });
+      const result = await appInvoke<DownloadResult>("start_download", { request });
       setDownloadPercent(100);
       downloadPercentRef.current = 100;
       setDownloadMessage(`${result.message} Arquivos salvos em ${result.outputDir}`);
@@ -635,7 +637,7 @@ function App() {
 
   async function openFolder() {
     try {
-      await invoke("open_downloads_folder", { platformFolder: platformFolder || null });
+      await appInvoke("open_downloads_folder", { platformFolder: platformFolder || null });
     } catch (error) {
       setDownloadError(errorText(error));
     }
@@ -650,7 +652,9 @@ function App() {
     const parts = [
       "yt-dlp",
       `"${activeUrl}"`,
-      `-o "Downloads\\YT-DLP Deck\\${platformFolder}\\%(uploader)s - %(title)s [%(id)s].%(ext)s"`,
+      isAndroidRuntime
+        ? `-o "Downloads/YT-DLP Deck/${platformFolder}/%(title)s [%(id)s].%(ext)s"`
+        : `-o "Downloads\\YT-DLP Deck\\${platformFolder}\\%(uploader)s - %(title)s [%(id)s].%(ext)s"`,
       "--no-playlist",
       "--add-metadata",
       "--concurrent-fragments 4",
@@ -914,7 +918,11 @@ function App() {
         <PageHeader
           eyebrow="Passo 04 · controle"
           title={<>Ajuste qualidade e <em>acesso.</em></>}
-          description="Escolha a resolução desejada. Para conteúdo restrito, use uma sessão do navegador ou um arquivo cookies.txt."
+          description={
+            isAndroidRuntime
+              ? "Escolha a resolução. No Android, o yt-dlp e o FFmpeg já estão incorporados ao aplicativo."
+              : "Escolha a resolução desejada. Para conteúdo restrito, use uma sessão do navegador ou um arquivo cookies.txt."
+          }
           icon={Settings2}
         />
         <div className="settings-layout">
@@ -964,7 +972,7 @@ function App() {
               </div>
             </div>
             <div className="cookie-grid">
-              {cookieOptions.map((item) => {
+              {availableCookieOptions.map((item) => {
                 const Icon = item.icon;
                 return (
                   <button

@@ -1,0 +1,39 @@
+use serde::de::DeserializeOwned;
+use tauri::{plugin::PluginApi, AppHandle, Runtime};
+
+use crate::models::*;
+
+pub fn init<R: Runtime, C: DeserializeOwned>(
+    app: &AppHandle<R>,
+    _api: PluginApi<R, C>,
+) -> crate::Result<MobileDownloader<R>> {
+    Ok(MobileDownloader(app.clone()))
+}
+
+/// Access to the mobile-downloader APIs.
+pub struct MobileDownloader<R: Runtime>(AppHandle<R>);
+
+impl<R: Runtime> MobileDownloader<R> {
+    pub fn check_tools(&self) -> crate::Result<ToolStatus> {
+        Err(crate::Error::Unsupported)
+    }
+
+    pub fn search_videos(&self, _payload: SearchRequest) -> crate::Result<SearchResponse> {
+        Err(crate::Error::Unsupported)
+    }
+
+    pub fn start_download(&self, _payload: StartDownloadRequest) -> crate::Result<DownloadResult> {
+        Err(crate::Error::Unsupported)
+    }
+
+    pub fn open_downloads_folder(
+        &self,
+        _payload: OpenDownloadsRequest,
+    ) -> crate::Result<EmptyResponse> {
+        Err(crate::Error::Unsupported)
+    }
+
+    pub fn open_external_url(&self, _payload: OpenUrlRequest) -> crate::Result<EmptyResponse> {
+        Err(crate::Error::Unsupported)
+    }
+}

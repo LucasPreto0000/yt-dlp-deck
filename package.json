@@ -10,7 +10,10 @@
     "build:wasm": "asc assembly/visual-core.ts --outFile public/visual-core.wasm --optimize --runtime stub",
     "build": "npm run build:wasm && tsc && vite build",
     "desktop:dev": "tauri dev",
-    "desktop:build": "tauri build"
+    "desktop:build": "tauri build",
+    "android:init": "tauri android init",
+    "android:dev": "tauri android dev",
+    "android:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android.ps1"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",

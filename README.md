@@ -1,6 +1,7 @@
 # YT-DLP Deck
 
-Aplicativo desktop para Windows construído com Tauri 2, Rust, HTML, CSS e JavaScript.
+Aplicativo para Windows e Android construído com Tauri 2, Rust, React,
+TypeScript, Kotlin e Python.
 
 FEITO INTEIRAMENTE POR IA, ENTAO TERÁ BUGS!!!!
 
@@ -36,8 +37,32 @@ Para gerar novamente o `.exe` e o instalador:
 npm run desktop:build
 ```
 
-O código nativo está em `src-tauri\src\lib.rs`. A interface React/TypeScript está em
-`src\App.tsx`, com o design system em `src\styles.css`.
+### Android
+
+A versão Android é independente: incorpora Python 3.14, yt-dlp e FFmpegKit,
+sem exigir Termux ou arquivos externos. Ela salva a mídia em:
+
+`Downloads/YT-DLP Deck/<Plataforma>`
+
+Para gerar o APK ARM64 instalável:
+
+```powershell
+npm run android:build
+```
+
+O resultado fica em:
+
+`src-tauri\target\android\YT-DLP-Deck-Android-v1.0.0-arm64.apk`
+
+Requisitos de compilação: JDK 17, Android SDK 36, Build Tools, NDK
+27.3.13750724 e os targets Rust do Android. O script também contorna o bloqueio
+de links simbólicos do Windows e assina o APK com a chave local de
+desenvolvimento. Para a Google Play, configure uma chave de produção.
+
+O código nativo desktop está em `src-tauri\src\lib.rs`. O motor Android está em
+`src-tauri\plugins\mobile-downloader`, com Kotlin, Python/yt-dlp e FFmpegKit. A
+interface React/TypeScript está em `src\App.tsx`, com o design system em
+`src\styles.css`.
 
 O background gráfico usa WebGPU/WGSL, com fallback WebGL2/GLSL em
 `src\visuals\gpuBackdrop.ts`. Os parâmetros da animação são calculados pelo módulo

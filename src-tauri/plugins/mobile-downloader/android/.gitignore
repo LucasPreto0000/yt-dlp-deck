@@ -1,0 +1,4 @@
+/build
+/.tauri
+__pycache__/
+*.py[cod]

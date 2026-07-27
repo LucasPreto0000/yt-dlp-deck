@@ -1,0 +1,3 @@
+-keep class com.ytdlpdeck.mobiledownloader.** { *; }
+-keep class com.chaquo.python.** { *; }
+-keep class com.arthenica.ffmpegkit.** { *; }
