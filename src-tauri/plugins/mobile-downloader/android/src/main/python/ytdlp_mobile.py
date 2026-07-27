@@ -16,9 +16,7 @@ class _MobileLogger:
         self._send(message)
 
     def warning(self, message):
-        if "requested merging of multiple formats but ffmpeg is not installed" in str(
-            message
-        ).lower():
+        if "requested merging of multiple formats" in str(message).lower():
             self._send("[sistema] Vídeo e áudio serão unidos pelo FFmpeg incorporado.")
             return
         self._send(f"WARNING: {message}")
@@ -147,9 +145,9 @@ def download(
         "concurrent_fragment_downloads": max(1, min(int(concurrent_fragments), 4)),
         "continuedl": True,
         "format": _selector(media_format, quality),
-        # Android uses FFmpegKit after yt-dlp finishes. This lets yt-dlp download
-        # split video/audio streams without requiring a standalone ffmpeg binary.
-        "ignoreerrors": "only_download",
+        # Android uses FFmpegKit after yt-dlp finishes. This prevents yt-dlp from
+        # requiring a standalone ffmpeg binary to merge split video/audio streams.
+        "allow_unplayable_formats": True,
         "logger": _MobileLogger(callback),
         "nopart": False,
         "noplaylist": True,
