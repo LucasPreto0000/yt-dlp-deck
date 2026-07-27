@@ -16,6 +16,11 @@ class _MobileLogger:
         self._send(message)
 
     def warning(self, message):
+        if "requested merging of multiple formats but ffmpeg is not installed" in str(
+            message
+        ).lower():
+            self._send("[sistema] Vídeo e áudio serão unidos pelo FFmpeg incorporado.")
+            return
         self._send(f"WARNING: {message}")
 
     def error(self, message):
@@ -142,6 +147,9 @@ def download(
         "concurrent_fragment_downloads": max(1, min(int(concurrent_fragments), 4)),
         "continuedl": True,
         "format": _selector(media_format, quality),
+        # Android uses FFmpegKit after yt-dlp finishes. This lets yt-dlp download
+        # split video/audio streams without requiring a standalone ffmpeg binary.
+        "ignoreerrors": "only_download",
         "logger": _MobileLogger(callback),
         "nopart": False,
         "noplaylist": True,
@@ -165,6 +173,12 @@ def download(
         callback.checkpoint()
         info = ydl.extract_info(url, download=True)
 
+    if not info:
+        raise RuntimeError(
+            "O yt-dlp não conseguiu extrair ou baixar este vídeo."
+        )
+
+    requested_formats = info.get("requested_formats") or []
     downloads = info.get("requested_downloads") or []
     files = []
     for item in downloads:
@@ -177,6 +191,30 @@ def download(
                     "acodec": item.get("acodec") or "none",
                 }
             )
+
+    if not files and len(requested_formats) > 1:
+        candidates = glob.glob(os.path.join(work_dir, "*"))
+        for item in requested_formats:
+            format_id = str(item.get("format_id") or "")
+            marker = f".f{format_id}."
+            path = next(
+                (
+                    candidate
+                    for candidate in candidates
+                    if marker in os.path.basename(candidate)
+                    and os.path.isfile(candidate)
+                    and not candidate.endswith((".part", ".ytdl"))
+                ),
+                None,
+            )
+            if path:
+                files.append(
+                    {
+                        "path": path,
+                        "vcodec": item.get("vcodec") or "none",
+                        "acodec": item.get("acodec") or "none",
+                    }
+                )
 
     if not files:
         prepared = ydl.prepare_filename(info)
@@ -194,6 +232,16 @@ def download(
 
     if not files:
         raise RuntimeError("O yt-dlp terminou sem produzir um arquivo de mídia.")
+
+    if len(requested_formats) > 1:
+        has_video = any(item["vcodec"] != "none" for item in files)
+        has_audio = any(
+            item["vcodec"] == "none" and item["acodec"] != "none" for item in files
+        )
+        if not has_video or not has_audio:
+            raise RuntimeError(
+                "O yt-dlp não conseguiu baixar todas as faixas de vídeo e áudio."
+            )
 
     return json.dumps(
         {
