@@ -2441,6 +2441,11 @@ input {
     padding: 9px 14px;
     border-right: 0;
     border-bottom: 1px solid var(--line);
+    scrollbar-width: none;
+  }
+
+  .sidebar::-webkit-scrollbar {
+    display: none;
   }
 
   .sidebar-title,
@@ -2570,7 +2575,8 @@ input {
 
   .live-console {
     max-height: 240px;
-    font-size: 10px;
+    font-size: 13px;
+    line-height: 1.55;
   }
 
   .mobile-library-head span,
@@ -2583,11 +2589,47 @@ input {
   .mobile-history-main span,
   .mobile-library-head button,
   .mobile-history-actions button {
-    font-size: 10px;
+    font-size: 12px;
   }
 }
 
 @media (max-width: 620px) {
+  .page-header p,
+  input {
+    font-size: 16px;
+  }
+
+  .eyebrow,
+  .choice-tag,
+  .field-panel label,
+  .cookie-file label,
+  .preview-label,
+  .section-label,
+  .terminal-head,
+  .progress-caption,
+  .success-message,
+  .review-row small,
+  .review-row strong,
+  .quality-list strong,
+  .quality-list small,
+  .cookie-grid strong,
+  .cookie-grid small {
+    font-size: 13px;
+  }
+
+  .source-tabs button,
+  .soft-button,
+  .primary-button,
+  .back-button,
+  .next-button,
+  .folder-button,
+  .retry-button,
+  .mobile-file-picker,
+  .mobile-setting-toggle {
+    min-height: 48px;
+    font-size: 14px;
+  }
+
   .mobile-library-head,
   .mobile-history-item {
     align-items: stretch;
@@ -2606,6 +2648,12 @@ input {
   .mobile-history-actions button:last-child:nth-child(odd) {
     grid-column: 1 / -1;
   }
+}
+
+.mobile-file-picker.is-danger {
+  color: #ff9385;
+  border-color: rgb(255 94 74 / 32%);
+  background: rgb(255 70 54 / 8%);
 }
 
 @supports (padding: env(safe-area-inset-top)) {

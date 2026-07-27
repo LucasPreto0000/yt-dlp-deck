@@ -7,11 +7,11 @@ FEITO INTEIRAMENTE POR IA, ENTAO TERÁ BUGS!!!!
 
 ## Downloads oficiais
 
-- [Baixar para Windows (`yt-dlp-deck.exe`)](https://github.com/LucasPreto0000/yt-dlp-deck/releases/download/v1.1.3/yt-dlp-deck.exe)
-- [Baixar para Android ARM64 (`.apk`)](https://github.com/LucasPreto0000/yt-dlp-deck/releases/download/v1.1.3/YT-DLP-Deck-Android-v1.1.3-arm64.apk)
-- [Ver a release completa e as notas da versão](https://github.com/LucasPreto0000/yt-dlp-deck/releases/tag/v1.1.3)
+- [Baixar para Windows (`yt-dlp-deck.exe`)](https://github.com/LucasPreto0000/yt-dlp-deck/releases/download/v1.1.4/yt-dlp-deck.exe)
+- [Baixar para Android ARM64 (`.apk`)](https://github.com/LucasPreto0000/yt-dlp-deck/releases/download/v1.1.4/YT-DLP-Deck-Android-v1.1.4-arm64.apk)
+- [Ver a release completa e as notas da versão](https://github.com/LucasPreto0000/yt-dlp-deck/releases/tag/v1.1.4)
 
-O APK é compatível com Android 7 ou superior em aparelhos ARM64. No Android,
+O APK é compatível com Android 13 ou superior em aparelhos ARM64. No Android,
 pode ser necessário permitir a instalação de aplicativos desconhecidos.
 
 ## Usar no Windows
@@ -59,8 +59,12 @@ Recursos móveis:
 - suporte ao menu Compartilhar do Android;
 - importação segura de `cookies.txt`;
 - opção de baixar somente por Wi-Fi;
-- armazenamento compatível do Android 7 ao Android atual;
-- yt-dlp-ejs incorporado e fragmentos adaptados ao consumo de bateria.
+- armazenamento moderno via MediaStore para Android 13 ou superior;
+- verificação preventiva de espaço livre antes do download;
+- yt-dlp-ejs e QuickJS incorporados para extração completa do YouTube;
+- navegação imersiva opcional, com controle nas configurações;
+- busca pré-aquecida e cache temporário para respostas mais rápidas;
+- exclusão dos cookies importados diretamente pelo aplicativo.
 
 Para gerar o APK ARM64 instalável:
 
@@ -70,7 +74,7 @@ npm run android:build
 
 O resultado fica em:
 
-`src-tauri\target\android\YT-DLP-Deck-Android-v1.1.3-arm64.apk`
+`src-tauri\target\android\YT-DLP-Deck-Android-v1.1.4-arm64.apk`
 
 Para gerar um Android App Bundle:
 
@@ -80,12 +84,13 @@ npm run android:bundle
 
 O AAB fica em:
 
-`src-tauri\target\android\YT-DLP-Deck-Android-v1.1.3-arm64.aab`
+`src-tauri\target\android\YT-DLP-Deck-Android-v1.1.4-arm64.aab`
 
 Requisitos de compilação: JDK 17, Android SDK 36, Build Tools, NDK
 27.3.13750724 e os targets Rust do Android. O script também contorna o bloqueio
-de links simbólicos do Windows e assina o APK com a chave local de
-desenvolvimento. Para a Google Play, configure uma chave de produção.
+de links simbólicos do Windows, compila o QuickJS para ARM64 e assina o APK com
+uma chave local persistente de release, criada fora do repositório. Para a
+Google Play, configure uma chave de produção.
 
 Nunca salve a chave ou as senhas no repositório. O script usa estas variáveis
 quando todas estiverem definidas:

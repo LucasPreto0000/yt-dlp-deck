@@ -21,6 +21,8 @@ Default permissions for the plugin
 - `allow-request-mobile-permissions`
 - `allow-choose-download-directory`
 - `allow-choose-cookie-file`
+- `allow-delete-cookie-file`
+- `allow-set-immersive-navigation`
 
 ## Permission Table
 
@@ -157,6 +159,32 @@ Enables the control_download command without any pre-configured scope.
 <td>
 
 Denies the control_download command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mobile-downloader:allow-delete-cookie-file`
+
+</td>
+<td>
+
+Enables the delete_cookie_file command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mobile-downloader:deny-delete-cookie-file`
+
+</td>
+<td>
+
+Denies the delete_cookie_file command without any pre-configured scope.
 
 </td>
 </tr>
@@ -417,6 +445,32 @@ Enables the search_videos command without any pre-configured scope.
 <td>
 
 Denies the search_videos command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mobile-downloader:allow-set-immersive-navigation`
+
+</td>
+<td>
+
+Enables the set_immersive_navigation command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mobile-downloader:deny-set-immersive-navigation`
+
+</td>
+<td>
+
+Denies the set_immersive_navigation command without any pre-configured scope.
 
 </td>
 </tr>

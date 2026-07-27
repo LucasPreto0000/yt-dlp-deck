@@ -3,6 +3,7 @@
 /public/visual-core.wasm
 /src-tauri/target
 /src-tauri/gen
+/src-tauri/plugins/mobile-downloader/android/src/main/jniLibs/
 /_run_temp.bat
 *.pdb
 *.jks

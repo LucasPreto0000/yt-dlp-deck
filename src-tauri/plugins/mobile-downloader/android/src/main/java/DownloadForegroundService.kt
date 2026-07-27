@@ -8,7 +8,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -27,17 +26,25 @@ class DownloadForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_PAUSE -> {
-                DownloadRuntime.pause()
-                message = "Download pausado"
+                val record = activeRecord()
+                if (record?.status in PAUSABLE_STATES && DownloadRuntime.pause()) {
+                    message = "Download pausado"
+                    persistControl("paused", message, "[controle] Download pausado pela notificação.")
+                } else {
+                    message = "A etapa atual não pode ser pausada"
+                }
             }
             ACTION_RESUME -> {
-                DownloadRuntime.resume()
-                message = "Download retomado"
+                if (DownloadRuntime.resume()) {
+                    message = "Download retomado"
+                    persistControl("running", message, "[controle] Download retomado pela notificação.")
+                }
             }
             ACTION_CANCEL -> {
                 DownloadRuntime.cancel()
                 FFmpegKit.cancel()
                 message = "Cancelando download…"
+                persistControl("cancelled", message, "[controle] Cancelamento solicitado pela notificação.")
             }
             ACTION_UPDATE -> {
                 title = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { title }
@@ -55,21 +62,22 @@ class DownloadForegroundService : Service() {
         }
 
         val notification = buildNotification()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
-        }
+        startForeground(
+            NOTIFICATION_ID,
+            notification,
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+        )
         return START_NOT_STICKY
     }
 
     override fun onTimeout(startId: Int, fgsType: Int) {
         DownloadRuntime.cancel()
         FFmpegKit.cancel()
+        persistControl(
+            "cancelled",
+            "O Android encerrou o serviço após atingir o limite de execução.",
+            "[sistema] Limite de execução em segundo plano atingido.",
+        )
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf(startId)
     }
@@ -103,13 +111,16 @@ class DownloadForegroundService : Service() {
             .setProgress(100, percent, percent <= 0)
 
         if (!DownloadRuntime.isCancelled()) {
+            val canPause = activeRecord()?.status in PAUSABLE_STATES
             val pauseAction = if (DownloadRuntime.isPaused()) ACTION_RESUME else ACTION_PAUSE
             val pauseLabel = if (DownloadRuntime.isPaused()) "Retomar" else "Pausar"
-            builder.addAction(
-                0,
-                pauseLabel,
-                serviceAction(pauseAction, 11),
-            )
+            if (DownloadRuntime.isPaused() || canPause) {
+                builder.addAction(
+                    0,
+                    pauseLabel,
+                    serviceAction(pauseAction, 11),
+                )
+            }
             builder.addAction(
                 0,
                 "Cancelar",
@@ -117,6 +128,21 @@ class DownloadForegroundService : Service() {
             )
         }
         return builder.build()
+    }
+
+    private fun activeRecord(): MobileDownloadRecord? =
+        DownloadRuntime.activeId?.let { DownloadStore.get(this).find(it) }
+
+    private fun persistControl(status: String, newMessage: String, line: String) {
+        val id = DownloadRuntime.activeId ?: return
+        DownloadStore.get(this).update(id) {
+            it.status = status
+            it.message = newMessage
+            it.console.add(line)
+            if (it.console.size > 300) {
+                it.console.subList(0, it.console.size - 300).clear()
+            }
+        }
     }
 
     private fun serviceAction(action: String, requestCode: Int): PendingIntent =
@@ -128,7 +154,6 @@ class DownloadForegroundService : Service() {
         )
 
     private fun createChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
             NotificationChannel(
@@ -154,6 +179,7 @@ class DownloadForegroundService : Service() {
         private const val EXTRA_TITLE = "title"
         private const val EXTRA_MESSAGE = "message"
         private const val EXTRA_PERCENT = "percent"
+        private val PAUSABLE_STATES = setOf("queued", "running", "paused")
 
         fun start(context: Context, title: String) {
             val intent = Intent(context, DownloadForegroundService::class.java)

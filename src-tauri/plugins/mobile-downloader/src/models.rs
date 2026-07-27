@@ -105,6 +105,7 @@ pub struct MobileSettingsResponse {
     pub download_directory: String,
     pub notifications_granted: bool,
     pub storage_granted: bool,
+    pub immersive_navigation: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -142,4 +143,10 @@ pub struct OpenUrlRequest {
 #[serde(rename_all = "camelCase")]
 pub struct EmptyResponse {
     pub ok: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImmersiveNavigationRequest {
+    pub enabled: bool,
 }

@@ -22,7 +22,7 @@ internal data class MobileDownloadRecord(
     var updatedAt: Long,
     val console: MutableList<String>,
 ) {
-    fun toJson(): JSONObject = JSONObject().apply {
+    fun toJson(includeConsole: Boolean = true): JSONObject = JSONObject().apply {
         put("id", id)
         put("title", title)
         put("url", url)
@@ -34,7 +34,7 @@ internal data class MobileDownloadRecord(
         put("fileName", fileName)
         put("createdAt", createdAt)
         put("updatedAt", updatedAt)
-        put("console", JSONArray(console))
+        put("console", if (includeConsole) JSONArray(console) else JSONArray())
     }
 
     companion object {
@@ -62,53 +62,101 @@ internal class DownloadStore private constructor(context: Context) {
     private val lock = Any()
 
     fun list(): List<MobileDownloadRecord> = synchronized(lock) {
-        readAll().sortedByDescending { it.createdAt }
+        migrateLegacyIfNeeded()
+        readIds()
+            .mapNotNull(::readRecord)
+            .sortedByDescending { it.createdAt }
     }
 
     fun find(id: String): MobileDownloadRecord? = synchronized(lock) {
-        readAll().firstOrNull { it.id == id }
+        migrateLegacyIfNeeded()
+        readRecord(id)
     }
 
     fun save(record: MobileDownloadRecord) = synchronized(lock) {
-        val records = readAll().filterNot { it.id == record.id }.toMutableList()
-        records.add(record)
-        writeAll(records.sortedByDescending { it.createdAt }.take(MAX_HISTORY))
+        migrateLegacyIfNeeded()
+        val previousIds = readIds()
+        val ids = buildList {
+            add(record.id)
+            addAll(previousIds.filterNot { it == record.id })
+        }.take(MAX_HISTORY)
+        preferences.edit().apply {
+            putString(recordKey(record.id), record.toJson().toString())
+            putString(INDEX_KEY, JSONArray(ids).toString())
+            previousIds.filterNot(ids::contains).forEach { remove(recordKey(it)) }
+        }.apply()
     }
 
     fun update(id: String, change: (MobileDownloadRecord) -> Unit): MobileDownloadRecord? =
         synchronized(lock) {
-            val records = readAll().toMutableList()
-            val index = records.indexOfFirst { it.id == id }
-            if (index < 0) return@synchronized null
-            change(records[index])
-            records[index].updatedAt = System.currentTimeMillis()
-            writeAll(records)
-            records[index]
+            migrateLegacyIfNeeded()
+            val record = readRecord(id) ?: return@synchronized null
+            change(record)
+            record.updatedAt = System.currentTimeMillis()
+            preferences.edit()
+                .putString(recordKey(id), record.toJson().toString())
+                .apply()
+            record
         }
 
     fun clearFinished() = synchronized(lock) {
-        writeAll(readAll().filter { it.status in ACTIVE_STATES })
+        migrateLegacyIfNeeded()
+        writeAll(list().filter { it.status in ACTIVE_STATES })
     }
 
     fun remove(id: String): MobileDownloadRecord? = synchronized(lock) {
-        val records = readAll().toMutableList()
-        val removed = records.firstOrNull { it.id == id } ?: return@synchronized null
-        records.removeAll { it.id == id }
-        writeAll(records)
+        migrateLegacyIfNeeded()
+        val removed = readRecord(id) ?: return@synchronized null
+        val ids = readIds().filterNot { it == id }
+        preferences.edit()
+            .remove(recordKey(id))
+            .putString(INDEX_KEY, JSONArray(ids).toString())
+            .apply()
         removed
     }
 
-    private fun readAll(): List<MobileDownloadRecord> = runCatching {
-        val array = JSONArray(preferences.getString(KEY, "[]"))
-        List(array.length()) { index -> MobileDownloadRecord.fromJson(array.getJSONObject(index)) }
+    private fun readIds(): List<String> = runCatching {
+        val array = JSONArray(preferences.getString(INDEX_KEY, "[]"))
+        List(array.length()) { index -> array.getString(index) }
     }.getOrDefault(emptyList())
 
+    private fun readRecord(id: String): MobileDownloadRecord? = runCatching {
+        preferences.getString(recordKey(id), null)
+            ?.let(::JSONObject)
+            ?.let(MobileDownloadRecord::fromJson)
+    }.getOrNull()
+
     private fun writeAll(records: List<MobileDownloadRecord>) {
-        preferences.edit().putString(KEY, JSONArray(records.map { it.toJson() }).toString()).apply()
+        val previousIds = readIds()
+        val recordsById = records
+            .sortedByDescending { it.createdAt }
+            .take(MAX_HISTORY)
+            .associateBy { it.id }
+        preferences.edit().apply {
+            previousIds.filterNot(recordsById::containsKey).forEach { remove(recordKey(it)) }
+            recordsById.forEach { (id, record) ->
+                putString(recordKey(id), record.toJson().toString())
+            }
+            putString(INDEX_KEY, JSONArray(recordsById.keys.toList()).toString())
+        }.apply()
     }
 
+    private fun migrateLegacyIfNeeded() {
+        if (preferences.contains(INDEX_KEY)) return
+        val records = runCatching {
+            val array = JSONArray(preferences.getString(LEGACY_KEY, "[]"))
+            List(array.length()) { index -> MobileDownloadRecord.fromJson(array.getJSONObject(index)) }
+        }.getOrDefault(emptyList())
+        preferences.edit().putString(INDEX_KEY, "[]").remove(LEGACY_KEY).apply()
+        if (records.isNotEmpty()) writeAll(records)
+    }
+
+    private fun recordKey(id: String) = "$RECORD_PREFIX$id"
+
     companion object {
-        private const val KEY = "history"
+        private const val LEGACY_KEY = "history"
+        private const val INDEX_KEY = "history_v2_ids"
+        private const val RECORD_PREFIX = "record_"
         private const val MAX_HISTORY = 40
         private val ACTIVE_STATES = setOf("queued", "running", "paused", "processing", "saving")
 
@@ -130,6 +178,7 @@ internal object DownloadRuntime {
     var activeId: String? = null
         private set
 
+    @Synchronized
     fun begin(id: String) {
         check(activeId == null) { "Já existe um download em andamento." }
         activeId = id
@@ -137,18 +186,21 @@ internal object DownloadRuntime {
         cancelled.set(false)
     }
 
+    @Synchronized
     fun pause(): Boolean {
         if (activeId == null || cancelled.get()) return false
         paused.set(true)
         return true
     }
 
+    @Synchronized
     fun resume(): Boolean {
         if (activeId == null || cancelled.get()) return false
         paused.set(false)
         return true
     }
 
+    @Synchronized
     fun cancel(): Boolean {
         if (activeId == null) return false
         cancelled.set(true)
@@ -167,6 +219,7 @@ internal object DownloadRuntime {
         if (cancelled.get()) throw DownloadCancelledException()
     }
 
+    @Synchronized
     fun finish(id: String) {
         if (activeId == id) {
             activeId = null

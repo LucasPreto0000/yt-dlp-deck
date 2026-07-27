@@ -45,6 +45,64 @@ $env:ANDROID_HOME = $sdkRoot
 $env:ANDROID_SDK_ROOT = $sdkRoot
 $env:NDK_HOME = $ndkRoot
 
+$quickJsVersion = "2026-06-04"
+$quickJsTarget = Join-Path $projectRoot "src-tauri\plugins\mobile-downloader\android\src\main\jniLibs\arm64-v8a\libqjs.so"
+$quickJsStamp = "$quickJsTarget.version"
+if (!(Test-Path -LiteralPath $quickJsTarget) -or
+    !(Test-Path -LiteralPath $quickJsStamp) -or
+    (Get-Content -Raw -LiteralPath $quickJsStamp).Trim() -ne $quickJsVersion) {
+    $quickJsWork = Join-Path $tauriRoot "target\quickjs-android"
+    $quickJsArchive = Join-Path $quickJsWork "quickjs.tar.xz"
+    $quickJsSource = Join-Path $quickJsWork "source"
+    New-Item -ItemType Directory -Force -Path $quickJsWork | Out-Null
+    if (!(Test-Path -LiteralPath $quickJsArchive) -or
+        (Get-Item -LiteralPath $quickJsArchive).Length -lt 1024) {
+        & curl.exe --fail --location --silent --show-error `
+            --output $quickJsArchive `
+            "https://bellard.org/quickjs/quickjs-$quickJsVersion.tar.xz"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Não foi possível baixar o código-fonte oficial do QuickJS."
+        }
+    }
+    if (Test-Path -LiteralPath $quickJsSource) {
+        $resolvedQuickJsSource = (Resolve-Path -LiteralPath $quickJsSource).Path
+        $resolvedQuickJsWork = (Resolve-Path -LiteralPath $quickJsWork).Path
+        if (!$resolvedQuickJsSource.StartsWith($resolvedQuickJsWork, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "A pasta temporária do QuickJS ficou fora do diretório esperado."
+        }
+        Remove-Item -LiteralPath $resolvedQuickJsSource -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path $quickJsSource | Out-Null
+    & tar.exe -xf $quickJsArchive -C $quickJsSource --strip-components=1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Não foi possível extrair o código-fonte oficial do QuickJS."
+    }
+    $clang = Join-Path $ndkRoot "toolchains\llvm\prebuilt\windows-x86_64\bin\aarch64-linux-android33-clang.cmd"
+    if (!(Test-Path -LiteralPath $clang)) {
+        throw "Compilador Android arm64 do NDK não encontrado."
+    }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $quickJsTarget) | Out-Null
+    Push-Location $quickJsSource
+    try {
+        @"
+#include <stdint.h>
+const uint8_t qjsc_repl[] = { 0 };
+const uint32_t qjsc_repl_size = 0;
+"@ | Set-Content -LiteralPath (Join-Path $quickJsSource "qjsc_repl_stub.c") -Encoding ascii
+        $quickJsVersionDefine = "-DCONFIG_VERSION=\`"$quickJsVersion\`""
+        & $clang -O2 -fPIE -pie -D_GNU_SOURCE $quickJsVersionDefine `
+            -o $quickJsTarget qjs.c quickjs.c dtoa.c libregexp.c libunicode.c cutils.c quickjs-libc.c `
+            qjsc_repl_stub.c `
+            -lm -ldl
+        if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $quickJsTarget)) {
+            throw "Não foi possível compilar o runtime QuickJS para Android arm64."
+        }
+        Set-Content -LiteralPath $quickJsStamp -Value $quickJsVersion -Encoding ascii
+    } finally {
+        Pop-Location
+    }
+}
+
 Push-Location $projectRoot
 try {
     if (!(Test-Path -LiteralPath $androidRoot)) {
@@ -53,6 +111,44 @@ try {
             throw "Falha ao inicializar o projeto Tauri Android."
         }
     }
+
+    $generatedBuildFile = Join-Path $androidRoot "build.gradle.kts"
+    $generatedBuild = Get-Content -Raw -LiteralPath $generatedBuildFile
+    $updatedGeneratedBuild = $generatedBuild -replace (
+        'org\.jetbrains\.kotlin:kotlin-gradle-plugin:[^"]+'
+    ), 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.2.20'
+    if ($updatedGeneratedBuild -ne $generatedBuild) {
+        Set-Content -LiteralPath $generatedBuildFile -Value $updatedGeneratedBuild -Encoding utf8
+    }
+
+    $generatedAppBuildFile = Join-Path $androidRoot "app\build.gradle.kts"
+    $generatedAppBuild = Get-Content -Raw -LiteralPath $generatedAppBuildFile
+    $androidDependencyVersions = [ordered]@{
+        'androidx\.webkit:webkit:[^"]+' = 'androidx.webkit:webkit:1.16.0'
+        'androidx\.activity:activity-ktx:[^"]+' = 'androidx.activity:activity-ktx:1.13.0'
+        'com\.google\.android\.material:material:[^"]+' = 'com.google.android.material:material:1.14.0'
+        'androidx\.lifecycle:lifecycle-process:[^"]+' = 'androidx.lifecycle:lifecycle-process:2.11.0'
+        'androidx\.test\.ext:junit:[^"]+' = 'androidx.test.ext:junit:1.3.0'
+        'androidx\.test\.espresso:espresso-core:[^"]+' = 'androidx.test.espresso:espresso-core:3.7.0'
+    }
+    $updatedGeneratedAppBuild = $generatedAppBuild
+    foreach ($dependencyPattern in $androidDependencyVersions.Keys) {
+        $updatedGeneratedAppBuild = $updatedGeneratedAppBuild -replace (
+            $dependencyPattern
+        ), $androidDependencyVersions[$dependencyPattern]
+    }
+    if ($updatedGeneratedAppBuild -ne $generatedAppBuild) {
+        Set-Content -LiteralPath $generatedAppBuildFile -Value $updatedGeneratedAppBuild -Encoding utf8
+    }
+
+    $verificationSource = Join-Path $tauriRoot "android\verification-metadata.xml"
+    $verificationDirectory = Join-Path $androidRoot "gradle"
+    if (!(Test-Path -LiteralPath $verificationSource)) {
+        throw "O catálogo SHA-256 das dependências Android não foi encontrado."
+    }
+    New-Item -ItemType Directory -Force -Path $verificationDirectory | Out-Null
+    Copy-Item -LiteralPath $verificationSource `
+        -Destination (Join-Path $verificationDirectory "verification-metadata.xml") -Force
 
     & npm run tauri android build -- --apk --target aarch64
     $tauriExit = $LASTEXITCODE
@@ -107,23 +203,43 @@ try {
         $keyPassword = $env:YTDLP_ANDROID_KEY_PASSWORD
         $signatureLabel = "produção"
     } else {
-        $keyDirectory = Join-Path $env:USERPROFILE ".android"
-        $keyStore = Join-Path $keyDirectory "debug.keystore"
-        $keyAlias = "androiddebugkey"
-        $storePassword = "android"
-        $keyPassword = "android"
-        $signatureLabel = "desenvolvimento"
+        $keyDirectory = Join-Path $env:LOCALAPPDATA "YT-DLP-Deck\signing"
+        $keyStore = Join-Path $keyDirectory "release.keystore"
+        $signingProperties = Join-Path $keyDirectory "signing.properties"
         New-Item -ItemType Directory -Force -Path $keyDirectory | Out-Null
+        if (Test-Path -LiteralPath $signingProperties) {
+            $localSigning = ConvertFrom-StringData (Get-Content -Raw -LiteralPath $signingProperties)
+            $keyAlias = $localSigning.KeyAlias
+            $storePassword = $localSigning.StorePassword
+            $keyPassword = $localSigning.KeyPassword
+        } else {
+            $keyAlias = "yt-dlp-deck-release"
+            $passwordBytes = New-Object byte[] 32
+            $passwordGenerator = [Security.Cryptography.RandomNumberGenerator]::Create()
+            try {
+                $passwordGenerator.GetBytes($passwordBytes)
+            } finally {
+                $passwordGenerator.Dispose()
+            }
+            $storePassword = [Convert]::ToBase64String($passwordBytes)
+            $keyPassword = $storePassword
+            @"
+KeyAlias=$keyAlias
+StorePassword=$storePassword
+KeyPassword=$keyPassword
+"@ | Set-Content -LiteralPath $signingProperties -Encoding utf8
+        }
         if (!(Test-Path -LiteralPath $keyStore)) {
             & (Join-Path $jdkRoot "bin\keytool.exe") `
                 -genkeypair -keystore $keyStore -storepass $storePassword `
                 -alias $keyAlias -keypass $keyPassword `
-                -dname "CN=Android Debug,O=Android,C=US" `
-                -keyalg RSA -keysize 2048 -validity 10000
+                -dname "CN=YT-DLP Deck Release,O=YT-DLP Deck,C=BR" `
+                -keyalg RSA -keysize 4096 -validity 10000
             if ($LASTEXITCODE -ne 0) {
-                throw "Não foi possível gerar a chave de desenvolvimento."
+                throw "Não foi possível gerar a chave local de produção."
             }
         }
+        $signatureLabel = "produção local persistente"
     }
 
     $outputDirectory = Join-Path $tauriRoot "target\android"
@@ -167,10 +283,18 @@ try {
         if ($LASTEXITCODE -ne 0) {
             throw "Falha ao alinhar o APK."
         }
-        & (Join-Path $buildTools "apksigner.bat") sign `
-            --ks $keyStore --ks-key-alias $keyAlias `
-            --ks-pass "pass:$storePassword" --key-pass "pass:$keyPassword" `
-            --out $finalApk $alignedApk
+        $env:YTDLP_DECK_SIGN_STORE_PASS = $storePassword
+        $env:YTDLP_DECK_SIGN_KEY_PASS = $keyPassword
+        try {
+            & (Join-Path $buildTools "apksigner.bat") sign `
+                --ks $keyStore --ks-key-alias $keyAlias `
+                --ks-pass "env:YTDLP_DECK_SIGN_STORE_PASS" `
+                --key-pass "env:YTDLP_DECK_SIGN_KEY_PASS" `
+                --out $finalApk $alignedApk
+        } finally {
+            Remove-Item Env:YTDLP_DECK_SIGN_STORE_PASS -ErrorAction SilentlyContinue
+            Remove-Item Env:YTDLP_DECK_SIGN_KEY_PASS -ErrorAction SilentlyContinue
+        }
         if ($LASTEXITCODE -ne 0) {
             throw "Falha ao assinar o APK."
         }

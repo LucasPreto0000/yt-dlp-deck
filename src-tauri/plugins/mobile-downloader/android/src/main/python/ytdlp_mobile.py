@@ -2,11 +2,32 @@ import glob
 import json
 import os
 import re
+from urllib.parse import urlsplit, urlunsplit
 
 from yt_dlp import YoutubeDL
 
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _RAW_PROGRESS = re.compile(r"^\[download\]\s+\d+(?:\.\d+)?%")
+_URL = re.compile(r"https?://[^\s]+")
+
+
+def _redact_url_queries(message):
+    def redact(match):
+        raw = match.group(0)
+        trailing = ""
+        while raw and raw[-1] in ".,;)]}":
+            trailing = raw[-1] + trailing
+            raw = raw[:-1]
+        try:
+            parts = urlsplit(raw)
+            if not parts.query and not parts.fragment:
+                return raw + trailing
+            safe = urlunsplit((parts.scheme, parts.netloc, parts.path, "<oculto>", ""))
+            return safe + trailing
+        except ValueError:
+            return "[URL ocultada]" + trailing
+
+    return _URL.sub(redact, str(message or ""))
 
 
 class _MobileLogger:
@@ -32,7 +53,7 @@ class _MobileLogger:
         self._send(f"ERROR: {message}")
 
     def _send(self, message):
-        text = str(message or "").strip()
+        text = _redact_url_queries(message).strip()
         if text:
             self.callback.onLog(text)
 
@@ -191,101 +212,123 @@ def download(
     quality,
     concurrent_fragments,
     cookie_file,
+    quickjs_path,
     callback,
 ):
     os.makedirs(work_dir, exist_ok=True)
-    expected_tracks = 1 if media_format in {"mp3", "flac", "wav", "m4a"} else 2
-    options = {
+    common_options = {
         "concurrent_fragment_downloads": max(1, min(int(concurrent_fragments), 4)),
         "continuedl": True,
-        "format": _selector(media_format, quality),
-        # Android uses FFmpegKit after yt-dlp finishes. This prevents yt-dlp from
-        # requiring a standalone ffmpeg binary to merge split video/audio streams.
-        "allow_unplayable_formats": True,
         "logger": _MobileLogger(callback),
         "nopart": False,
         "noplaylist": True,
-        "outtmpl": os.path.join(work_dir, "%(title).150B [%(id)s].%(ext)s"),
         "overwrites": False,
-        "progress_hooks": [_progress_hook(callback, expected_tracks)],
         "quiet": True,
         "retries": 5,
         "fragment_retries": 5,
         "socket_timeout": 20,
         "trim_file_name": 180,
+        "js_runtimes": {"quickjs": {"path": quickjs_path}},
     }
     if cookie_file and os.path.isfile(cookie_file):
-        options["cookiefile"] = cookie_file
+        common_options["cookiefile"] = cookie_file
 
     callback.onLog(f"[sistema] Destino temporário: {work_dir}")
     callback.onLog(
-        f"[sistema] Fragmentos simultâneos: {options['concurrent_fragment_downloads']}"
+        f"[sistema] Fragmentos simultâneos: {common_options['concurrent_fragment_downloads']}"
     )
-    with YoutubeDL(options) as ydl:
+    callback.onLog("[sistema] Runtime JavaScript QuickJS incorporado e ativo.")
+
+    probe_options = {
+        **common_options,
+        "format": _selector(media_format, quality),
+        "skip_download": True,
+    }
+    with YoutubeDL(probe_options) as ydl:
         callback.checkpoint()
-        info = ydl.extract_info(url, download=True)
+        info = ydl.extract_info(url, download=False)
 
     if not info:
         raise RuntimeError(
-            "O yt-dlp não conseguiu extrair ou baixar este vídeo."
+            "O yt-dlp não conseguiu extrair este vídeo."
         )
 
-    requested_formats = info.get("requested_formats") or []
-    downloads = info.get("requested_downloads") or []
-    files = []
-    for item in downloads:
-        path = item.get("filepath")
-        if path and os.path.isfile(path):
-            files.append(
-                {
-                    "path": path,
-                    "vcodec": item.get("vcodec") or "none",
-                    "acodec": item.get("acodec") or "none",
-                }
-            )
+    requested_formats = info.get("requested_formats") or [info]
+    selected_tracks = [
+        item for item in requested_formats
+        if item and (item.get("format_id") or item.get("url"))
+    ]
+    if not selected_tracks:
+        raise RuntimeError("O yt-dlp não encontrou faixas reproduzíveis para esta mídia.")
 
-    if not files and len(requested_formats) > 1:
-        candidates = glob.glob(os.path.join(work_dir, "*"))
-        for item in requested_formats:
-            format_id = str(item.get("format_id") or "")
-            marker = f".f{format_id}."
+    expected_tracks = len(selected_tracks)
+    expected_size = sum(
+        int(item.get("filesize") or item.get("filesize_approx") or 0)
+        for item in selected_tracks
+    )
+    if expected_size:
+        callback.onExpectedSize(expected_size)
+        callback.onLog(
+            f"[info] Tamanho estimado das faixas: {_format_bytes(expected_size)}"
+        )
+
+    progress_hook = _progress_hook(callback, expected_tracks)
+    files = []
+    for selected in selected_tracks:
+        callback.checkpoint()
+        format_id = str(selected.get("format_id") or "best")
+        track_options = {
+            **common_options,
+            "format": format_id,
+            "outtmpl": os.path.join(
+                work_dir,
+                "%(title).150B [%(id)s].f%(format_id)s.%(ext)s",
+            ),
+            "progress_hooks": [progress_hook],
+        }
+        with YoutubeDL(track_options) as track_ydl:
+            track_info = track_ydl.extract_info(url, download=True)
+            downloads = (track_info or {}).get("requested_downloads") or []
+            paths = [
+                item.get("filepath") for item in downloads
+                if item.get("filepath")
+            ]
+            if track_info:
+                paths.append(track_ydl.prepare_filename(track_info))
             path = next(
                 (
-                    candidate
-                    for candidate in candidates
-                    if marker in os.path.basename(candidate)
+                    candidate for candidate in paths
+                    if candidate
                     and os.path.isfile(candidate)
                     and not candidate.endswith((".part", ".ytdl"))
                 ),
                 None,
             )
-            if path:
+            if not path:
+                marker = f".f{format_id}."
+                path = next(
+                    (
+                        candidate
+                        for candidate in glob.glob(os.path.join(work_dir, "*"))
+                        if marker in os.path.basename(candidate)
+                        and os.path.isfile(candidate)
+                        and not candidate.endswith((".part", ".ytdl"))
+                    ),
+                    None,
+                )
+            if path and all(item["path"] != path for item in files):
                 files.append(
                     {
                         "path": path,
-                        "vcodec": item.get("vcodec") or "none",
-                        "acodec": item.get("acodec") or "none",
+                        "vcodec": selected.get("vcodec") or "none",
+                        "acodec": selected.get("acodec") or "none",
                     }
                 )
-
-    if not files:
-        prepared = ydl.prepare_filename(info)
-        candidates = [prepared, *glob.glob(os.path.join(work_dir, "*"))]
-        for path in candidates:
-            if os.path.isfile(path) and not path.endswith((".part", ".ytdl")):
-                files.append(
-                    {
-                        "path": path,
-                        "vcodec": info.get("vcodec") or "none",
-                        "acodec": info.get("acodec") or "none",
-                    }
-                )
-                break
 
     if not files:
         raise RuntimeError("O yt-dlp terminou sem produzir um arquivo de mídia.")
 
-    if len(requested_formats) > 1:
+    if len(selected_tracks) > 1:
         has_video = any(item["vcodec"] != "none" for item in files)
         has_audio = any(
             item["vcodec"] == "none" and item["acodec"] != "none" for item in files

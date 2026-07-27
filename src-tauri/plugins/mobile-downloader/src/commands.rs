@@ -126,3 +126,17 @@ pub(crate) async fn choose_cookie_file<R: Runtime>(
 ) -> Result<CookieFileResponse> {
     app.mobile_downloader().choose_cookie_file()
 }
+
+#[command]
+pub(crate) async fn delete_cookie_file<R: Runtime>(app: AppHandle<R>) -> Result<()> {
+    app.mobile_downloader().delete_cookie_file().map(|_| ())
+}
+
+#[command]
+pub(crate) async fn set_immersive_navigation<R: Runtime>(
+    app: AppHandle<R>,
+    enabled: bool,
+) -> Result<MobileSettingsResponse> {
+    app.mobile_downloader()
+        .set_immersive_navigation(ImmersiveNavigationRequest { enabled })
+}

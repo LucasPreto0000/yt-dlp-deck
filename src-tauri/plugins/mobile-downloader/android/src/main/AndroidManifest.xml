@@ -7,9 +7,6 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <uses-permission
-        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="28" />
 
     <queries>
         <package android:name="ru.zdevs.zarchiver" />
@@ -22,7 +19,10 @@
         </intent>
     </queries>
 
-    <application>
+    <application
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules">
         <service
             android:name=".DownloadForegroundService"
             android:exported="false"
@@ -32,6 +32,7 @@
         <activity
             android:name="com.ytdlpdeck.desktop.MainActivity"
             android:exported="true"
+            tools:ignore="MissingClass"
             tools:node="merge">
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />

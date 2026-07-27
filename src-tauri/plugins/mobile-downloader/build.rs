@@ -16,6 +16,8 @@ const COMMANDS: &[&str] = &[
     "request_mobile_permissions",
     "choose_download_directory",
     "choose_cookie_file",
+    "delete_cookie_file",
+    "set_immersive_navigation",
 ];
 
 fn main() {

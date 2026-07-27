@@ -17,5 +17,7 @@ permissions = [
   "allow-get-mobile-settings",
   "allow-request-mobile-permissions",
   "allow-choose-download-directory",
-  "allow-choose-cookie-file"
+  "allow-choose-cookie-file",
+  "allow-delete-cookie-file",
+  "allow-set-immersive-navigation"
 ]

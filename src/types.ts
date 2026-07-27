@@ -83,6 +83,7 @@ export interface MobileSettings {
   downloadDirectory: string;
   notificationsGranted: boolean;
   storageGranted: boolean;
+  immersiveNavigation: boolean;
 }
 
 export interface MobileCookieFile {

@@ -139,4 +139,19 @@ impl<R: Runtime> MobileDownloader<R> {
             .run_mobile_plugin("chooseCookieFile", ())
             .map_err(Into::into)
     }
+
+    pub fn delete_cookie_file(&self) -> crate::Result<EmptyResponse> {
+        self.0
+            .run_mobile_plugin("deleteCookieFile", ())
+            .map_err(Into::into)
+    }
+
+    pub fn set_immersive_navigation(
+        &self,
+        payload: ImmersiveNavigationRequest,
+    ) -> crate::Result<MobileSettingsResponse> {
+        self.0
+            .run_mobile_plugin("setImmersiveNavigation", payload)
+            .map_err(Into::into)
+    }
 }

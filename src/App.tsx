@@ -499,6 +499,7 @@ function App() {
   const mobilePaused = isAndroidRuntime && (
     mobileDownloadState?.paused || mobileCurrentStatus === "paused"
   );
+  const mobileCanPause = mobilePaused || mobileCurrentStatus === "queued" || mobileCurrentStatus === "running";
   const downloadStageLabel = mobilePaused
     ? "Download pausado"
     : mobileCurrentStatus === "processing"
@@ -528,18 +529,23 @@ function App() {
     setDownloading(isActive);
     setDownloadPercent(record.percent);
     downloadPercentRef.current = record.percent;
-    downloadBufferRef.current = (record.console || []).slice(-300);
-    setDownloadLines([...downloadBufferRef.current]);
+    if ((record.console || []).length > 0) {
+      downloadBufferRef.current = record.console.slice(-300);
+      setDownloadLines([...downloadBufferRef.current]);
+    }
     if (record.status === "completed") {
       setDownloadMessage(`${record.message} Arquivo salvo em ${record.outputDir}`);
       setDownloadError("");
     } else if (record.status === "failed" || record.status === "cancelled") {
       setDownloadError(record.message);
     }
-    setMobileHistory((current) => [
-      record,
-      ...current.filter((item) => item.id !== record.id),
-    ].slice(0, 40));
+    setMobileHistory((current) => {
+      const existing = current.find((item) => item.id === record.id);
+      const merged = record.console.length > 0
+        ? record
+        : { ...record, console: existing?.console || [] };
+      return [merged, ...current.filter((item) => item.id !== record.id)].slice(0, 40);
+    });
   }
 
   useEffect(() => {
@@ -605,7 +611,7 @@ function App() {
       }
     };
     void pollState();
-    const timer = window.setInterval(() => void pollState(), 300);
+    const timer = window.setInterval(() => void pollState(), 1_500);
     return () => {
       active = false;
       window.clearInterval(timer);
@@ -708,10 +714,11 @@ function App() {
       setMobileSettings(settings);
       if (settings.sharedUrl) applySharedUrl(settings.sharedUrl);
       if (state.current) {
+        const persisted = (history.items || []).find((item) => item.id === state.current?.id);
         setDownloading(state.active);
         setDownloadPercent(state.current.percent);
         downloadPercentRef.current = state.current.percent;
-        downloadBufferRef.current = (state.current.console || []).slice(-300);
+        downloadBufferRef.current = (persisted?.console || state.current.console || []).slice(-300);
         setDownloadLines([...downloadBufferRef.current]);
       }
     } catch (error) {
@@ -749,6 +756,21 @@ function App() {
     }
   }
 
+  async function toggleImmersiveNavigation() {
+    if (!isAndroidRuntime || mobileActionBusy) return;
+    setMobileActionBusy(true);
+    try {
+      const settings = await appInvoke<MobileSettings>("set_immersive_navigation", {
+        enabled: !(mobileSettings?.immersiveNavigation ?? true),
+      });
+      setMobileSettings(settings);
+    } catch (error) {
+      setDownloadError(errorText(error));
+    } finally {
+      setMobileActionBusy(false);
+    }
+  }
+
   async function chooseMobileCookieFile() {
     if (!isAndroidRuntime || mobileActionBusy) return;
     setMobileActionBusy(true);
@@ -756,6 +778,20 @@ function App() {
       const selected = await appInvoke<MobileCookieFile>("choose_cookie_file");
       setCookieFile(selected.path);
       setCookies("file");
+    } catch (error) {
+      setDownloadError(errorText(error));
+    } finally {
+      setMobileActionBusy(false);
+    }
+  }
+
+  async function deleteMobileCookieFile() {
+    if (!isAndroidRuntime || mobileActionBusy) return;
+    setMobileActionBusy(true);
+    try {
+      await appInvoke("delete_cookie_file");
+      setCookieFile("");
+      setCookies("none");
     } catch (error) {
       setDownloadError(errorText(error));
     } finally {
@@ -1305,16 +1341,28 @@ function App() {
                     <FileText size={14} /> {isAndroidRuntime ? "Arquivo cookies.txt" : "Caminho do cookies.txt"}
                   </label>
                   {isAndroidRuntime ? (
-                    <button
-                      id="cookie-file-path"
-                      type="button"
-                      className="mobile-file-picker"
-                      onClick={chooseMobileCookieFile}
-                      disabled={mobileActionBusy}
-                    >
-                      <FileText size={16} />
-                      {cookieFile ? "cookies.txt importado · trocar arquivo" : "Selecionar cookies.txt"}
-                    </button>
+                    <>
+                      <button
+                        id="cookie-file-path"
+                        type="button"
+                        className="mobile-file-picker"
+                        onClick={chooseMobileCookieFile}
+                        disabled={mobileActionBusy}
+                      >
+                        <FileText size={16} />
+                        {cookieFile ? "cookies.txt importado · trocar arquivo" : "Selecionar cookies.txt"}
+                      </button>
+                      {cookieFile && (
+                        <button
+                          type="button"
+                          className="mobile-file-picker is-danger"
+                          onClick={deleteMobileCookieFile}
+                          disabled={mobileActionBusy}
+                        >
+                          <Trash2 size={16} /> Apagar cookies importados
+                        </button>
+                      )}
+                    </>
                   ) : (
                     <input
                       id="cookie-file-path"
@@ -1350,6 +1398,23 @@ function App() {
                   <span>
                     <strong>Baixar somente por Wi-Fi</strong>
                     <small>Bloqueia o início em redes móveis</small>
+                  </span>
+                </span>
+                <i />
+              </button>
+              <button
+                type="button"
+                className={`mobile-setting-toggle ${mobileSettings?.immersiveNavigation !== false ? "is-active" : ""}`}
+                role="switch"
+                aria-checked={mobileSettings?.immersiveNavigation !== false}
+                onClick={toggleImmersiveNavigation}
+                disabled={mobileActionBusy}
+              >
+                <span>
+                  <MonitorPlay size={17} />
+                  <span>
+                    <strong>Ocultar navegação do sistema</strong>
+                    <small>Deslize de baixo para cima para mostrá-la temporariamente</small>
                   </span>
                 </span>
                 <i />
@@ -1451,10 +1516,15 @@ function App() {
                   onClick={() =>
                     controlMobileDownload(mobileDownloadState?.paused ? "resume" : "pause")
                   }
-                  disabled={mobileActionBusy}
+                  disabled={mobileActionBusy || !mobileCanPause}
+                  title={mobileCanPause ? undefined : "O FFmpeg e o salvamento não podem ser pausados"}
                 >
                   {mobileDownloadState?.paused ? <Play size={18} /> : <Pause size={18} />}
-                  {mobileDownloadState?.paused ? "Retomar" : "Pausar"}
+                  {mobileDownloadState?.paused
+                    ? "Retomar"
+                    : mobileCanPause
+                      ? "Pausar"
+                      : "Pausa indisponível"}
                 </button>
                 <button
                   className="folder-button mobile-control-button is-danger"

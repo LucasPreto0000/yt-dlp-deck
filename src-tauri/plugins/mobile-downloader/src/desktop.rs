@@ -96,4 +96,15 @@ impl<R: Runtime> MobileDownloader<R> {
     pub fn choose_cookie_file(&self) -> crate::Result<CookieFileResponse> {
         Err(crate::Error::Unsupported)
     }
+
+    pub fn delete_cookie_file(&self) -> crate::Result<EmptyResponse> {
+        Err(crate::Error::Unsupported)
+    }
+
+    pub fn set_immersive_navigation(
+        &self,
+        _payload: ImmersiveNavigationRequest,
+    ) -> crate::Result<MobileSettingsResponse> {
+        Err(crate::Error::Unsupported)
+    }
 }

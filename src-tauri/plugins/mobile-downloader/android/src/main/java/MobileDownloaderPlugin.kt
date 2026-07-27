@@ -8,13 +8,12 @@ import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.media.MediaScannerConnection
 import android.net.Uri
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
-import android.os.Build
 import android.os.Environment
 import android.os.PowerManager
+import android.os.storage.StorageManager
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.OpenableColumns
@@ -91,6 +90,11 @@ class DownloadItemArgs {
     lateinit var id: String
 }
 
+@InvokeArg
+class ImmersiveNavigationArgs {
+    var enabled: Boolean = true
+}
+
 private data class SavedMedia(val uri: Uri, val displayLocation: String)
 
 private class PythonProgress(
@@ -101,6 +105,7 @@ private class PythonProgress(
     private val emitState: (MobileDownloadRecord) -> Unit,
 ) {
     private var lastPersistAt = 0L
+    private var requiredBytes = 0L
 
     @Suppress("unused")
     fun onProgress(line: String) {
@@ -118,6 +123,22 @@ private class PythonProgress(
 
     @Suppress("unused")
     fun checkpoint() = DownloadRuntime.checkpoint()
+
+    @Suppress("unused")
+    fun onExpectedSize(bytes: Long) {
+        requiredBytes = maxOf(requiredBytes, bytes)
+        val storage = activity.getSystemService(StorageManager::class.java)
+        val path = activity.getExternalFilesDir(null) ?: activity.filesDir
+        val allocatable = storage.getAllocatableBytes(storage.getUuidForPath(path))
+        val requiredWithMargin = requiredBytes
+            .coerceAtLeast(MIN_FREE_SPACE_BYTES)
+            .let { it * 2 + CONVERSION_MARGIN_BYTES }
+        check(allocatable >= requiredWithMargin) {
+            "Espaço insuficiente. São necessários aproximadamente " +
+                "${humanBytesStatic(requiredWithMargin)} livres para baixar e processar esta mídia."
+        }
+        onLog("[info] Espaço reservado para download e processamento: ${humanBytesStatic(requiredWithMargin)}")
+    }
 
     private fun append(line: String) {
         val percent = PROGRESS.find(line)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
@@ -138,7 +159,7 @@ private class PythonProgress(
         emit(line)
 
         val now = System.currentTimeMillis()
-        if (now - lastPersistAt >= 250 || percent == 100.0) {
+        if (now - lastPersistAt >= 1_000 || percent == 100.0) {
             record.updatedAt = now
             store.save(record)
             emitState(record)
@@ -150,6 +171,19 @@ private class PythonProgress(
     companion object {
         private val PROGRESS = Regex("""\[download]\s+([0-9.]+)%""")
         private const val KNOWN_JS_WARNING = "No supported JavaScript runtime could be found"
+        private const val MIN_FREE_SPACE_BYTES = 256L * 1024L * 1024L
+        private const val CONVERSION_MARGIN_BYTES = 128L * 1024L * 1024L
+
+        private fun humanBytesStatic(value: Long): String {
+            val units = arrayOf("B", "KiB", "MiB", "GiB")
+            var amount = value.toDouble()
+            var unit = 0
+            while (amount >= 1024 && unit < units.lastIndex) {
+                amount /= 1024
+                unit += 1
+            }
+            return "%.2f %s".format(Locale.US, amount, units[unit])
+        }
     }
 }
 
@@ -159,25 +193,25 @@ private class PythonProgress(
             strings = [Manifest.permission.POST_NOTIFICATIONS],
             alias = "notifications",
         ),
-        Permission(
-            strings = [Manifest.permission.WRITE_EXTERNAL_STORAGE],
-            alias = "storage",
-        ),
     ],
 )
 class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) {
     private val ioScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val store by lazy { DownloadStore.get(activity) }
+    private val searchCache = LinkedHashMap<String, Pair<Long, String>>()
     private var pendingSharedUrl: String? = null
 
     override fun load(webView: WebView) {
         pendingSharedUrl = extractSharedUrl(activity.intent)
-        enableImmersiveNavigation()
-        ioScope.launch { recoverInterruptedJobs() }
+        applyNavigationPreference()
+        ioScope.launch {
+            recoverInterruptedJobs()
+            runCatching { python() }
+        }
     }
 
     override fun onResume() {
-        enableImmersiveNavigation()
+        applyNavigationPreference()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -205,9 +239,24 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
         val args = invoke.parseArgs(SearchArgs::class.java)
         ioScope.launch {
             runCatching {
-                require(args.query.trim().length >= 2) { "Digite pelo menos dois caracteres." }
-                val module = python().getModule("ytdlp_mobile")
-                val json = module.callAttr("search", args.query.trim()).toString()
+                val query = args.query.trim()
+                require(query.length >= 2) { "Digite pelo menos dois caracteres." }
+                val key = query.lowercase(Locale.ROOT)
+                val now = System.currentTimeMillis()
+                val cached = synchronized(searchCache) {
+                    searchCache[key]?.takeIf { now - it.first < SEARCH_CACHE_MILLIS }?.second
+                }
+                val json = cached ?: python().getModule("ytdlp_mobile")
+                    .callAttr("search", query)
+                    .toString()
+                    .also { value ->
+                        synchronized(searchCache) {
+                            searchCache[key] = now to value
+                            while (searchCache.size > MAX_SEARCH_CACHE_ITEMS) {
+                                searchCache.remove(searchCache.keys.first())
+                            }
+                        }
+                    }
                 JSObject().apply { put("items", JSONArray(json)) }
             }.onSuccess(invoke::resolve).onFailure { reject(invoke, it) }
         }
@@ -223,17 +272,13 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
                 val request = args.request
                 validateDownloadRequest(request)
                 ensureNetworkAvailable(request.wifiOnly)
-                ensureLegacyStoragePermission()
-
                 val id = UUID.randomUUID().toString()
                 val platform = safeName(request.platformFolder.ifBlank { "Outro" })
                 val workRoot = File(
                     activity.getExternalFilesDir(null) ?: activity.filesDir,
                     "download-jobs",
                 ).apply { mkdirs() }
-                check(workRoot.usableSpace >= MIN_FREE_SPACE_BYTES) {
-                    "Espaço insuficiente. Libere pelo menos 256 MB e tente novamente."
-                }
+                ensureInitialStorageAvailable(workRoot)
                 val workDir = File(workRoot, id).apply { mkdirs() }
                 val now = System.currentTimeMillis()
                 record = MobileDownloadRecord(
@@ -273,6 +318,7 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
                         request.quality ?: "best",
                         adaptiveFragmentCount(),
                         request.cookieFile.orEmpty(),
+                        quickJsPath(),
                         progress,
                     ).toString()
                 val result = JSONObject(resultJson)
@@ -338,6 +384,11 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
     @Command
     fun controlDownload(invoke: Invoke) {
         val args = invoke.parseArgs(DownloadControlArgs::class.java)
+        val current = DownloadRuntime.activeId?.let(store::find)
+        if (args.action.equals("pause", ignoreCase = true) && current?.status !in PAUSABLE_STATES) {
+            invoke.reject("A pausa só está disponível enquanto a mídia está sendo transferida.")
+            return
+        }
         val changed = when (args.action.lowercase(Locale.ROOT)) {
             "pause" -> DownloadRuntime.pause()
             "resume" -> DownloadRuntime.resume()
@@ -377,11 +428,11 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
                 DownloadForegroundService.update(activity, it.title, it.message, it.percent)
             }
         }
-        invoke.resolve(downloadStateJson())
+        invoke.resolve(downloadStateJson(includeConsole = false))
     }
 
     @Command
-    fun getDownloadState(invoke: Invoke) = invoke.resolve(downloadStateJson())
+    fun getDownloadState(invoke: Invoke) = invoke.resolve(downloadStateJson(includeConsole = false))
 
     @Command
     fun getDownloadHistory(invoke: Invoke) {
@@ -436,6 +487,7 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
 
     @Command
     fun openDownloadsFolder(invoke: Invoke) {
+        val args = invoke.parseArgs(OpenDownloadsArgs::class.java)
         runCatching {
             val selectedTree = selectedTreeUri()
             val baseIntent = if (selectedTree != null) {
@@ -449,7 +501,8 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
             check(baseIntent.resolveActivity(activity.packageManager) != null) {
                 "Nenhum explorador de arquivos compatível foi encontrado."
             }
-            val folderUri = selectedTree ?: MediaStore.Downloads.EXTERNAL_CONTENT_URI
+            val folderUri = selectedTree?.let { configuredTreeDirectoryUri(it, args.platformFolder) }
+                ?: downloadsDocumentUri(args.platformFolder)
             val explorerIntents = FILE_MANAGER_PACKAGES.mapNotNull { packageName ->
                 val folderIntent = Intent(Intent.ACTION_VIEW)
                     .setDataAndType(folderUri, DocumentsContract.Document.MIME_TYPE_DIR)
@@ -502,17 +555,10 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
     @Command
     fun requestMobilePermissions(invoke: Invoke) {
         val aliases = buildList {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) !=
+            if (ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) !=
                 PackageManager.PERMISSION_GRANTED
             ) {
                 add("notifications")
-            }
-            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
-                ContextCompat.checkSelfPermission(activity, Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
-                PackageManager.PERMISSION_GRANTED
-            ) {
-                add("storage")
             }
         }
         if (aliases.isEmpty()) {
@@ -575,6 +621,28 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
         )
     }
 
+    @Command
+    fun deleteCookieFile(invoke: Invoke) {
+        runCatching {
+            val target = File(File(activity.filesDir, "cookies"), "imported-cookies.txt")
+            check(!target.exists() || target.delete()) {
+                "Não foi possível apagar o cookies.txt importado."
+            }
+            JSObject().apply { put("ok", true) }
+        }.onSuccess(invoke::resolve).onFailure { reject(invoke, it) }
+    }
+
+    @Command
+    fun setImmersiveNavigation(invoke: Invoke) {
+        val args = invoke.parseArgs(ImmersiveNavigationArgs::class.java)
+        activity.getSharedPreferences(PREFERENCES, Activity.MODE_PRIVATE)
+            .edit()
+            .putBoolean(IMMERSIVE_NAVIGATION_KEY, args.enabled)
+            .apply()
+        applyNavigationPreference()
+        invoke.resolve(settingsJson())
+    }
+
     @ActivityCallback
     fun cookieFileResult(invoke: Invoke, result: ActivityResult) {
         val uri = result.data?.data
@@ -622,17 +690,6 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
         }
     }
 
-    private fun ensureLegacyStoragePermission() {
-        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
-            check(
-                ContextCompat.checkSelfPermission(
-                    activity,
-                    Manifest.permission.WRITE_EXTERNAL_STORAGE,
-                ) == PackageManager.PERMISSION_GRANTED,
-            ) { "Permita o acesso ao armazenamento para salvar em Downloads." }
-        }
-    }
-
     private fun ensureNetworkAvailable(wifiOnly: Boolean) {
         val manager = activity.getSystemService(ConnectivityManager::class.java)
         val network = checkNotNull(manager.activeNetwork) {
@@ -651,15 +708,21 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
         }
     }
 
-    private fun enableImmersiveNavigation() {
+    private fun applyNavigationPreference() {
         activity.runOnUiThread {
             val controller = WindowCompat.getInsetsController(
                 activity.window,
                 activity.window.decorView,
             )
-            controller.systemBarsBehavior =
-                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            controller.hide(WindowInsetsCompat.Type.navigationBars())
+            val enabled = activity.getSharedPreferences(PREFERENCES, Activity.MODE_PRIVATE)
+                .getBoolean(IMMERSIVE_NAVIGATION_KEY, true)
+            if (enabled) {
+                controller.systemBarsBehavior =
+                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                controller.hide(WindowInsetsCompat.Type.navigationBars())
+            } else {
+                controller.show(WindowInsetsCompat.Type.navigationBars())
+            }
         }
     }
 
@@ -668,24 +731,40 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
         return Python.getInstance()
     }
 
+    private fun quickJsPath(): String {
+        val candidate = File(activity.applicationInfo.nativeLibraryDir, QUICKJS_LIBRARY)
+        check(candidate.isFile) {
+            "O runtime JavaScript QuickJS incorporado não foi encontrado."
+        }
+        return candidate.absolutePath
+    }
+
+    private fun ensureInitialStorageAvailable(path: File) {
+        val storage = activity.getSystemService(StorageManager::class.java)
+        val allocatable = storage.getAllocatableBytes(storage.getUuidForPath(path))
+        check(allocatable >= INITIAL_REQUIRED_BYTES) {
+            "Espaço insuficiente. Libere pelo menos ${humanBytes(INITIAL_REQUIRED_BYTES)} e tente novamente."
+        }
+    }
+
     private fun emitOutput(line: String) {
         val payload = JSObject().apply { put("line", line) }
         activity.runOnUiThread { trigger("download-output", payload) }
     }
 
     private fun emitRecordState(record: MobileDownloadRecord) {
-        val payload = JSObject.fromJSONObject(record.toJson())
+        val payload = JSObject.fromJSONObject(record.toJson(includeConsole = false))
         activity.runOnUiThread { trigger("download-state", payload) }
     }
 
-    private fun downloadStateJson(): JSObject {
+    private fun downloadStateJson(includeConsole: Boolean): JSObject {
         val activeId = DownloadRuntime.activeId
         val current = activeId?.let(store::find)
         return JSObject().apply {
             put("active", activeId != null)
             put("paused", DownloadRuntime.isPaused())
             put("cancelled", DownloadRuntime.isCancelled())
-            put("current", current?.toJson())
+            put("current", current?.toJson(includeConsole))
         }
     }
 
@@ -809,61 +888,47 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
             val document = checkNotNull(
                 targetDirectory.createFile(mimeType(source.extension), source.name),
             ) { "Não foi possível criar o arquivo na pasta escolhida." }
-            activity.contentResolver.openOutputStream(document.uri, "w").use { output ->
-                checkNotNull(output) { "Não foi possível abrir o arquivo de destino." }
-                copyWithProgress(source, output, progress)
+            try {
+                activity.contentResolver.openOutputStream(document.uri, "w").use { output ->
+                    checkNotNull(output) { "Não foi possível abrir o arquivo de destino." }
+                    copyWithProgress(source, output, progress)
+                }
+            } catch (error: Throwable) {
+                document.delete()
+                throw error
             }
             return SavedMedia(document.uri, "Pasta escolhida/YT-DLP Deck/$platform")
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val resolver = activity.contentResolver
-            val values = ContentValues().apply {
-                put(MediaStore.MediaColumns.DISPLAY_NAME, source.name)
-                put(MediaStore.MediaColumns.MIME_TYPE, mimeType(source.extension))
-                put(
-                    MediaStore.MediaColumns.RELATIVE_PATH,
-                    "${Environment.DIRECTORY_DOWNLOADS}/YT-DLP Deck/$platform",
-                )
-                put(MediaStore.MediaColumns.IS_PENDING, 1)
-            }
-            val uri = checkNotNull(
-                resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values),
-            ) { "O Android recusou a criação do arquivo em Downloads." }
-            try {
-                resolver.openOutputStream(uri).use { output ->
-                    checkNotNull(output) { "Não foi possível abrir o arquivo de destino." }
-                    copyWithProgress(source, output, progress)
-                }
-                resolver.update(
-                    uri,
-                    ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) },
-                    null,
-                    null,
-                )
-                return SavedMedia(uri, "Downloads/YT-DLP Deck/$platform")
-            } catch (error: Throwable) {
-                resolver.delete(uri, null, null)
-                throw error
-            }
+        val resolver = activity.contentResolver
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, source.name)
+            put(MediaStore.MediaColumns.MIME_TYPE, mimeType(source.extension))
+            put(
+                MediaStore.MediaColumns.RELATIVE_PATH,
+                "${Environment.DIRECTORY_DOWNLOADS}/YT-DLP Deck/$platform",
+            )
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
-
-        @Suppress("DEPRECATION")
-        val destination = File(
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-            "YT-DLP Deck/$platform/${source.name}",
-        )
-        destination.parentFile?.mkdirs()
-        destination.outputStream().use { output ->
-            copyWithProgress(source, output, progress)
+        val uri = checkNotNull(
+            resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values),
+        ) { "O Android recusou a criação do arquivo em Downloads." }
+        try {
+            resolver.openOutputStream(uri).use { output ->
+                checkNotNull(output) { "Não foi possível abrir o arquivo de destino." }
+                copyWithProgress(source, output, progress)
+            }
+            resolver.update(
+                uri,
+                ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) },
+                null,
+                null,
+            )
+            return SavedMedia(uri, "Downloads/YT-DLP Deck/$platform")
+        } catch (error: Throwable) {
+            resolver.delete(uri, null, null)
+            throw error
         }
-        MediaScannerConnection.scanFile(
-            activity,
-            arrayOf(destination.absolutePath),
-            arrayOf(mimeType(destination.extension)),
-            null,
-        )
-        return SavedMedia(Uri.fromFile(destination), "Downloads/YT-DLP Deck/$platform")
     }
 
     private fun copyWithProgress(
@@ -942,19 +1007,16 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
             put("downloadDirectory", configuredOutputLabel(null))
             put(
                 "notificationsGranted",
-                Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-                    ContextCompat.checkSelfPermission(
-                        activity,
-                        Manifest.permission.POST_NOTIFICATIONS,
-                    ) == PackageManager.PERMISSION_GRANTED,
+                ContextCompat.checkSelfPermission(
+                    activity,
+                    Manifest.permission.POST_NOTIFICATIONS,
+                ) == PackageManager.PERMISSION_GRANTED,
             )
+            put("storageGranted", true)
             put(
-                "storageGranted",
-                Build.VERSION.SDK_INT > Build.VERSION_CODES.P ||
-                    ContextCompat.checkSelfPermission(
-                        activity,
-                        Manifest.permission.WRITE_EXTERNAL_STORAGE,
-                    ) == PackageManager.PERMISSION_GRANTED,
+                "immersiveNavigation",
+                activity.getSharedPreferences(PREFERENCES, Activity.MODE_PRIVATE)
+                    .getBoolean(IMMERSIVE_NAVIGATION_KEY, true),
             )
         }
     }
@@ -972,6 +1034,28 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
         activity.getSharedPreferences(PREFERENCES, Activity.MODE_PRIVATE)
             .getString(DOWNLOAD_TREE_KEY, null)
             ?.let(Uri::parse)
+
+    private fun configuredTreeDirectoryUri(treeUri: Uri, platformFolder: String?): Uri {
+        val root = DocumentFile.fromTreeUri(activity, treeUri) ?: return treeUri
+        val appDirectory = root.findFile("YT-DLP Deck") ?: return treeUri
+        val platform = platformFolder
+            ?.takeIf { it.isNotBlank() }
+            ?.let(::safeName)
+            ?.let(appDirectory::findFile)
+        return (platform ?: appDirectory).uri
+    }
+
+    private fun downloadsDocumentUri(platformFolder: String?): Uri {
+        val suffix = platformFolder
+            ?.takeIf { it.isNotBlank() }
+            ?.let(::safeName)
+            ?.let { "/$it" }
+            .orEmpty()
+        return DocumentsContract.buildDocumentUri(
+            EXTERNAL_STORAGE_AUTHORITY,
+            "primary:${Environment.DIRECTORY_DOWNLOADS}/YT-DLP Deck$suffix",
+        )
+    }
 
     private fun adaptiveFragmentCount(): Int {
         val activityManager = activity.getSystemService(ActivityManager::class.java)
@@ -1036,10 +1120,15 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
     companion object {
         private const val PREFERENCES = "mobile_downloader_settings"
         private const val DOWNLOAD_TREE_KEY = "download_tree_uri"
-        private const val MIN_FREE_SPACE_BYTES = 256L * 1024L * 1024L
+        private const val IMMERSIVE_NAVIGATION_KEY = "immersive_navigation"
+        private const val INITIAL_REQUIRED_BYTES = 384L * 1024L * 1024L
         private const val MAX_COOKIE_FILE_BYTES = 10L * 1024L * 1024L
         private const val COPY_BUFFER_BYTES = 1024 * 1024
+        private const val QUICKJS_LIBRARY = "libqjs.so"
+        private const val EXTERNAL_STORAGE_AUTHORITY = "com.android.externalstorage.documents"
         private const val PARTIAL_RETENTION_MILLIS = 7L * 24L * 60L * 60L * 1000L
+        private const val SEARCH_CACHE_MILLIS = 5L * 60L * 1000L
+        private const val MAX_SEARCH_CACHE_ITEMS = 20
         private val AUDIO_FORMATS = setOf("mp3", "flac", "wav", "m4a")
         private val FILE_MANAGER_PACKAGES = listOf(
             "ru.zdevs.zarchiver",
@@ -1048,6 +1137,7 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
             "com.mixplorer",
         )
         private val ACTIVE_STATUSES = setOf("queued", "running", "paused", "processing", "saving")
+        private val PAUSABLE_STATES = setOf("queued", "running", "paused")
         private val URL_PATTERN = Regex("""https?://[^\s]+""", RegexOption.IGNORE_CASE)
     }
 }

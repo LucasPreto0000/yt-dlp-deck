@@ -19,10 +19,15 @@ const mobileCommands: Record<string, string> = {
   request_mobile_permissions: "request_mobile_permissions",
   choose_download_directory: "choose_download_directory",
   choose_cookie_file: "choose_cookie_file",
+  delete_cookie_file: "delete_cookie_file",
+  set_immersive_navigation: "set_immersive_navigation",
 };
 
 export const isAndroidRuntime =
   typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
+
+const isTauriRuntime =
+  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 export function appInvoke<T>(
   command: keyof typeof mobileCommands,
@@ -37,6 +42,7 @@ export function appInvoke<T>(
 export async function listenDownloadOutput(
   callback: (line: string) => void,
 ): Promise<() => void> {
+  if (!isTauriRuntime) return () => undefined;
   if (isAndroidRuntime) {
     const listener = await addPluginListener<{ line?: string }>(
       "mobile-downloader",
@@ -54,7 +60,7 @@ export async function listenMobilePluginEvent<T>(
   event: "download-state" | "shared-url",
   callback: (payload: T) => void,
 ): Promise<() => void> {
-  if (!isAndroidRuntime) return () => undefined;
+  if (!isAndroidRuntime || !isTauriRuntime) return () => undefined;
   const listener = await addPluginListener<T>("mobile-downloader", event, callback);
   return () => {
     void listener.unregister();

@@ -355,6 +355,18 @@
           "markdownDescription": "Denies the control_download command without any pre-configured scope."
         },
         {
+          "description": "Enables the delete_cookie_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-cookie-file",
+          "markdownDescription": "Enables the delete_cookie_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_cookie_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-cookie-file",
+          "markdownDescription": "Denies the delete_cookie_file command without any pre-configured scope."
+        },
+        {
           "description": "Enables the delete_download_item command without any pre-configured scope.",
           "type": "string",
           "const": "allow-delete-download-item",
@@ -475,6 +487,18 @@
           "markdownDescription": "Denies the search_videos command without any pre-configured scope."
         },
         {
+          "description": "Enables the set_immersive_navigation command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-immersive-navigation",
+          "markdownDescription": "Enables the set_immersive_navigation command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_immersive_navigation command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-immersive-navigation",
+          "markdownDescription": "Denies the set_immersive_navigation command without any pre-configured scope."
+        },
+        {
           "description": "Enables the share_download_item command without any pre-configured scope.",
           "type": "string",
           "const": "allow-share-download-item",
@@ -499,10 +523,10 @@
           "markdownDescription": "Denies the start_download command without any pre-configured scope."
         },
         {
-          "description": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-check-tools`\n- `allow-search-videos`\n- `allow-start-download`\n- `allow-open-downloads-folder`\n- `allow-open-external-url`\n- `allow-read-clipboard`\n- `allow-control-download`\n- `allow-get-download-state`\n- `allow-get-download-history`\n- `allow-clear-download-history`\n- `allow-open-download-item`\n- `allow-share-download-item`\n- `allow-delete-download-item`\n- `allow-get-mobile-settings`\n- `allow-request-mobile-permissions`\n- `allow-choose-download-directory`\n- `allow-choose-cookie-file`",
+          "description": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-check-tools`\n- `allow-search-videos`\n- `allow-start-download`\n- `allow-open-downloads-folder`\n- `allow-open-external-url`\n- `allow-read-clipboard`\n- `allow-control-download`\n- `allow-get-download-state`\n- `allow-get-download-history`\n- `allow-clear-download-history`\n- `allow-open-download-item`\n- `allow-share-download-item`\n- `allow-delete-download-item`\n- `allow-get-mobile-settings`\n- `allow-request-mobile-permissions`\n- `allow-choose-download-directory`\n- `allow-choose-cookie-file`\n- `allow-delete-cookie-file`\n- `allow-set-immersive-navigation`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-check-tools`\n- `allow-search-videos`\n- `allow-start-download`\n- `allow-open-downloads-folder`\n- `allow-open-external-url`\n- `allow-read-clipboard`\n- `allow-control-download`\n- `allow-get-download-state`\n- `allow-get-download-history`\n- `allow-clear-download-history`\n- `allow-open-download-item`\n- `allow-share-download-item`\n- `allow-delete-download-item`\n- `allow-get-mobile-settings`\n- `allow-request-mobile-permissions`\n- `allow-choose-download-directory`\n- `allow-choose-cookie-file`"
+          "markdownDescription": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-check-tools`\n- `allow-search-videos`\n- `allow-start-download`\n- `allow-open-downloads-folder`\n- `allow-open-external-url`\n- `allow-read-clipboard`\n- `allow-control-download`\n- `allow-get-download-state`\n- `allow-get-download-history`\n- `allow-clear-download-history`\n- `allow-open-download-item`\n- `allow-share-download-item`\n- `allow-delete-download-item`\n- `allow-get-mobile-settings`\n- `allow-request-mobile-permissions`\n- `allow-choose-download-directory`\n- `allow-choose-cookie-file`\n- `allow-delete-cookie-file`\n- `allow-set-immersive-navigation`"
         }
       ]
     }
