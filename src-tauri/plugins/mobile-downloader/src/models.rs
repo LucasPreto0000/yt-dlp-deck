@@ -114,6 +114,12 @@ pub struct CookieFileResponse {
     pub name: String,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardResponse {
+    pub text: String,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadItemRequest {

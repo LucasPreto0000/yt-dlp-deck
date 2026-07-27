@@ -7,6 +7,7 @@ const mobileCommands: Record<string, string> = {
   start_download: "start_download",
   open_downloads_folder: "open_downloads_folder",
   open_external_url: "open_external_url",
+  read_clipboard: "read_clipboard",
   control_download: "control_download",
   get_download_state: "get_download_state",
   get_download_history: "get_download_history",

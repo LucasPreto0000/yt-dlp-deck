@@ -46,6 +46,11 @@ pub(crate) async fn open_external_url<R: Runtime>(app: AppHandle<R>, url: String
 }
 
 #[command]
+pub(crate) async fn read_clipboard<R: Runtime>(app: AppHandle<R>) -> Result<ClipboardResponse> {
+    app.mobile_downloader().read_clipboard()
+}
+
+#[command]
 pub(crate) async fn control_download<R: Runtime>(
     app: AppHandle<R>,
     action: String,

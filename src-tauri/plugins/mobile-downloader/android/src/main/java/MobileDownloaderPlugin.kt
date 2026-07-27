@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.app.ActivityManager
 import android.app.DownloadManager
+import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -127,7 +128,7 @@ private class PythonProgress(
         emit(line)
 
         val now = System.currentTimeMillis()
-        if (now - lastPersistAt >= 650 || percent == 100.0) {
+        if (now - lastPersistAt >= 250 || percent == 100.0) {
             record.updatedAt = now
             store.save(record)
             emitState(record)
@@ -232,7 +233,7 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
                     fileName = null,
                     createdAt = now,
                     updatedAt = now,
-                    console = mutableListOf(),
+                    console = mutableListOf("[sistema] Iniciando yt-dlp no Android…"),
                 )
                 DownloadRuntime.begin(id)
                 store.save(record)
@@ -335,6 +336,11 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
         }
         DownloadRuntime.activeId?.let { id ->
             store.update(id) {
+                val controlLine = when (args.action.lowercase(Locale.ROOT)) {
+                    "pause" -> "[controle] Download pausado."
+                    "resume" -> "[controle] Download retomado."
+                    else -> "[controle] Cancelamento solicitado."
+                }
                 it.status = when (args.action.lowercase(Locale.ROOT)) {
                     "pause" -> "paused"
                     "resume" -> "running"
@@ -345,7 +351,10 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
                     "resume" -> "Download retomado"
                     else -> "Cancelando download…"
                 }
+                it.console.add(controlLine)
+                if (it.console.size > 300) it.console.removeAt(0)
             }?.let {
+                emitOutput(it.console.last())
                 emitRecordState(it)
                 DownloadForegroundService.update(activity, it.title, it.message, it.percent)
             }
@@ -411,13 +420,33 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
     fun openDownloadsFolder(invoke: Invoke) {
         runCatching {
             val selectedTree = selectedTreeUri()
-            val intent = if (selectedTree != null) {
-                Intent(Intent.ACTION_VIEW, selectedTree)
+            val baseIntent = if (selectedTree != null) {
+                Intent(Intent.ACTION_VIEW, selectedTree).addFlags(
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
             } else {
                 Intent(DownloadManager.ACTION_VIEW_DOWNLOADS)
             }
-            activity.startActivity(intent)
+            check(baseIntent.resolveActivity(activity.packageManager) != null) {
+                "Nenhum explorador de arquivos compatível foi encontrado."
+            }
+            activity.startActivity(Intent.createChooser(baseIntent, "Abrir pasta com…"))
             JSObject().apply { put("ok", true) }
+        }.onSuccess(invoke::resolve).onFailure { reject(invoke, it) }
+    }
+
+    @Command
+    fun readClipboard(invoke: Invoke) {
+        runCatching {
+            val clipboard = activity.getSystemService(ClipboardManager::class.java)
+            val text = clipboard.primaryClip
+                ?.takeIf { it.itemCount > 0 }
+                ?.getItemAt(0)
+                ?.coerceToText(activity)
+                ?.toString()
+                .orEmpty()
+            JSObject().apply { put("text", text) }
         }.onSuccess(invoke::resolve).onFailure { reject(invoke, it) }
     }
 
@@ -466,15 +495,16 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
 
     @Command
     fun chooseDownloadDirectory(invoke: Invoke) {
+        val directoryIntent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+            addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,
+            )
+        }
         startActivityForResult(
             invoke,
-            Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
-                addFlags(
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
-                        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,
-                )
-            },
+            Intent.createChooser(directoryIntent, "Escolher pasta com…"),
             "downloadDirectoryResult",
         )
     }
@@ -593,11 +623,13 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
     }
 
     private fun emitOutput(line: String) {
-        trigger("download-output", JSObject().apply { put("line", line) })
+        val payload = JSObject().apply { put("line", line) }
+        activity.runOnUiThread { trigger("download-output", payload) }
     }
 
     private fun emitRecordState(record: MobileDownloadRecord) {
-        trigger("download-state", JSObject.fromJSONObject(record.toJson()))
+        val payload = JSObject.fromJSONObject(record.toJson())
+        activity.runOnUiThread { trigger("download-state", payload) }
     }
 
     private fun downloadStateJson(): JSObject {

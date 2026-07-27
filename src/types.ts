@@ -89,3 +89,7 @@ export interface MobileCookieFile {
   path: string;
   name: string;
 }
+
+export interface MobileClipboard {
+  text: string;
+}

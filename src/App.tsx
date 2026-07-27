@@ -57,6 +57,7 @@ import type {
   DownloadRequest,
   DownloadResult,
   FormatId,
+  MobileClipboard,
   MobileCookieFile,
   MobileDownloadHistory,
   MobileDownloadRecord,
@@ -488,6 +489,19 @@ function App() {
   const activeUrl = sourceMode === "search" ? selectedMedia?.url || "" : directUrl;
   const searchAvailable = platform === "YouTube";
   const progress = (step / (steps.length - 1)) * 100;
+  const mobileCurrentStatus = mobileDownloadState?.current?.status;
+  const mobilePaused = isAndroidRuntime && (
+    mobileDownloadState?.paused || mobileCurrentStatus === "paused"
+  );
+  const downloadStageLabel = mobilePaused
+    ? "Download pausado"
+    : mobileCurrentStatus === "processing"
+      ? "Processando com FFmpeg"
+      : mobileCurrentStatus === "saving"
+        ? "Salvando arquivo"
+        : downloading
+          ? "Transferindo mídia"
+          : "Processo finalizado";
 
   const validStep = useMemo(() => {
     if (step === 0) return Boolean(platformFolder.trim());
@@ -496,6 +510,31 @@ function App() {
     if (step === 3) return cookies !== "file" || Boolean(cookieFile.trim());
     return true;
   }, [step, platformFolder, activeUrl, format, cookies, cookieFile]);
+
+  function applyMobileRecord(record: MobileDownloadRecord) {
+    const isActive = ["queued", "running", "paused", "processing", "saving"].includes(record.status);
+    setMobileDownloadState({
+      active: isActive,
+      paused: record.status === "paused",
+      cancelled: record.status === "cancelled",
+      current: record,
+    });
+    setDownloading(isActive);
+    setDownloadPercent(record.percent);
+    downloadPercentRef.current = record.percent;
+    downloadBufferRef.current = (record.console || []).slice(-300);
+    setDownloadLines([...downloadBufferRef.current]);
+    if (record.status === "completed") {
+      setDownloadMessage(`${record.message} Arquivo salvo em ${record.outputDir}`);
+      setDownloadError("");
+    } else if (record.status === "failed" || record.status === "cancelled") {
+      setDownloadError(record.message);
+    }
+    setMobileHistory((current) => [
+      record,
+      ...current.filter((item) => item.id !== record.id),
+    ].slice(0, 40));
+  }
 
   useEffect(() => {
     let active = true;
@@ -525,30 +564,7 @@ function App() {
         unlisteners.push(
           await listenMobilePluginEvent<MobileDownloadRecord>("download-state", (record) => {
             if (!active) return;
-            const isActive = ["queued", "running", "paused", "processing", "saving"].includes(record.status);
-            setMobileDownloadState({
-              active: isActive,
-              paused: record.status === "paused",
-              cancelled: record.status === "cancelled",
-              current: record,
-            });
-            setDownloading(isActive);
-            setDownloadPercent(record.percent);
-            downloadPercentRef.current = record.percent;
-            if (record.console?.length) {
-              downloadBufferRef.current = record.console.slice(-300);
-              setDownloadLines([...downloadBufferRef.current]);
-            }
-            if (record.status === "completed") {
-              setDownloadMessage(`${record.message} Arquivo salvo em ${record.outputDir}`);
-              setDownloadError("");
-            } else if (record.status === "failed" || record.status === "cancelled") {
-              setDownloadError(record.message);
-            }
-            setMobileHistory((current) => [
-              record,
-              ...current.filter((item) => item.id !== record.id),
-            ].slice(0, 40));
+            applyMobileRecord(record);
           }),
         );
         unlisteners.push(
@@ -565,6 +581,30 @@ function App() {
       unlisteners.forEach((unlisten) => unlisten());
     };
   }, []);
+
+  useEffect(() => {
+    if (!isAndroidRuntime || !downloading) return;
+    let active = true;
+    let polling = false;
+    const pollState = async () => {
+      if (!active || polling) return;
+      polling = true;
+      try {
+        const state = await appInvoke<MobileDownloadState>("get_download_state");
+        if (active && state.current) applyMobileRecord(state.current);
+      } catch {
+        // The event listener remains the primary path; polling repairs WebView event delays.
+      } finally {
+        polling = false;
+      }
+    };
+    void pollState();
+    const timer = window.setInterval(() => void pollState(), 300);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [downloading]);
 
   useEffect(() => {
     let active = true;
@@ -678,8 +718,11 @@ function App() {
     setMobileActionBusy(true);
     try {
       const state = await appInvoke<MobileDownloadState>("control_download", { action });
-      setMobileDownloadState(state);
-      setDownloading(state.active);
+      if (state.current) applyMobileRecord(state.current);
+      else {
+        setMobileDownloadState(state);
+        setDownloading(state.active);
+      }
     } catch (error) {
       setDownloadError(errorText(error));
     } finally {
@@ -760,9 +803,14 @@ function App() {
 
   async function pasteUrl() {
     try {
-      const value = await navigator.clipboard.readText();
+      const value = isAndroidRuntime
+        ? (await appInvoke<MobileClipboard>("read_clipboard")).text
+        : await navigator.clipboard.readText();
       if (value) {
         setDirectUrl(value.trim());
+        setSearchError("");
+      } else {
+        setSearchError("A área de transferência não contém um link.");
       }
     } catch (error) {
       setSearchError(`Não foi possível acessar a área de transferência: ${errorText(error)}`);
@@ -831,8 +879,11 @@ function App() {
     }
     setDownloading(true);
     setDownloadPercent(0);
-    setDownloadLines([]);
-    downloadBufferRef.current = [];
+    const initialLines = isAndroidRuntime
+      ? ["[sistema] Abrindo console Android…", "[sistema] Preparando yt-dlp e FFmpeg incorporados…"]
+      : [];
+    setDownloadLines(initialLines);
+    downloadBufferRef.current = initialLines;
     downloadPercentRef.current = 0;
     setDownloadMessage("");
     setDownloadError("");
@@ -1342,8 +1393,14 @@ function App() {
               <span className="button-shine" />
               {downloading ? <LoaderCircle className="spin" /> : <Download />}
               <span>
-                <strong>{downloading ? "Baixando mídia…" : "Iniciar download"}</strong>
-                <small>{downloading ? "Acompanhe o progresso abaixo" : "Executar com yt-dlp + FFmpeg"}</small>
+                <strong>{downloading ? downloadStageLabel : "Iniciar download"}</strong>
+                <small>
+                  {mobilePaused
+                    ? "Toque em Retomar para continuar"
+                    : downloading
+                      ? "Acompanhe o console em tempo real"
+                      : "Executar com yt-dlp + FFmpeg"}
+                </small>
               </span>
             </button>
             <button className="folder-button" onClick={openFolder}>
@@ -1389,7 +1446,7 @@ function App() {
             >
               <div className="progress-caption">
                 <span>
-                  <Activity size={14} /> {downloading ? "Transferindo e processando" : "Processo finalizado"}
+                  <Activity size={14} /> {downloadStageLabel}
                 </span>
                 <strong>{Math.round(downloadPercent)}%</strong>
               </div>
@@ -1409,14 +1466,16 @@ function App() {
                 </div>
               )}
               {downloadError && <InlineError message={downloadError} />}
-              {downloadLines.length > 0 && (
+              {(downloadLines.length > 0 || (isAndroidRuntime && downloading)) && (
                 <div className="live-console-shell">
                   <div className="live-console-head">
                     <span><SquareTerminal size={14} /> console yt-dlp + FFmpeg</span>
                     <small>{isAndroidRuntime ? "Android nativo" : "Windows nativo"}</small>
                   </div>
                   <pre className="live-console" ref={consoleRef}>
-                    {downloadLines.join("\n")}
+                    {downloadLines.length
+                      ? downloadLines.join("\n")
+                      : "[sistema] Aguardando saída do yt-dlp…"}
                   </pre>
                 </div>
               )}

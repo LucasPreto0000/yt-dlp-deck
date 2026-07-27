@@ -41,6 +41,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             commands::start_download,
             commands::open_downloads_folder,
             commands::open_external_url,
+            commands::read_clipboard,
             commands::control_download,
             commands::get_download_state,
             commands::get_download_history,

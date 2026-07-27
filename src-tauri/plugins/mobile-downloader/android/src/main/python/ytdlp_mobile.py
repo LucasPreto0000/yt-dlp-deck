@@ -1,8 +1,12 @@
 import glob
 import json
 import os
+import re
 
 from yt_dlp import YoutubeDL
+
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_RAW_PROGRESS = re.compile(r"^\[download\]\s+\d+(?:\.\d+)?%")
 
 
 class _MobileLogger:
@@ -10,7 +14,10 @@ class _MobileLogger:
         self.callback = callback
 
     def debug(self, message):
-        self._send(message)
+        clean = _ANSI_ESCAPE.sub("", str(message or "")).strip()
+        if _RAW_PROGRESS.match(clean):
+            return
+        self._send(clean)
 
     def info(self, message):
         self._send(message)
@@ -114,19 +121,65 @@ def _selector(media_format, quality):
     return f"bestvideo{height_filter}+bestaudio/best{height_filter}/best"
 
 
-def _progress_hook(callback):
+def _format_bytes(value):
+    if not value:
+        return "tamanho desconhecido"
+    size = float(value)
+    units = ("B", "KiB", "MiB", "GiB")
+    unit = units[0]
+    for candidate in units:
+        unit = candidate
+        if size < 1024 or candidate == units[-1]:
+            break
+        size /= 1024
+    return f"{size:.2f} {unit}"
+
+
+def _progress_hook(callback, expected_tracks):
+    completed_tracks = 0
+    current_format = None
+    announced_sizes = set()
+    known_totals = {}
+    total_announced = False
+
     def hook(status):
+        nonlocal completed_tracks, current_format, total_announced
         callback.checkpoint()
         state = status.get("status")
         if state == "downloading":
-            percent = str(status.get("_percent_str") or "").strip()
+            info = status.get("info_dict") or {}
+            format_id = str(info.get("format_id") or status.get("filename") or "media")
+            if current_format != format_id:
+                current_format = format_id
+            downloaded = status.get("downloaded_bytes") or 0
+            total = status.get("total_bytes") or status.get("total_bytes_estimate") or 0
+            raw_percent = (downloaded / total * 100) if total else 0
+            phase_size = 88 / max(1, expected_tracks)
+            percent = min(88.0, completed_tracks * phase_size + raw_percent * phase_size / 100)
             speed = str(status.get("_speed_str") or "").strip()
             eta = str(status.get("_eta_str") or "").strip()
+            if total and format_id not in announced_sizes:
+                callback.onLog(
+                    f"[info] Tamanho da faixa {format_id}: {_format_bytes(total)}"
+                )
+                announced_sizes.add(format_id)
+                known_totals[format_id] = total
+                if len(known_totals) >= expected_tracks and not total_announced:
+                    callback.onLog(
+                        f"[info] Tamanho estimado total: "
+                        f"{_format_bytes(sum(known_totals.values()))}"
+                    )
+                    total_announced = True
             callback.onProgress(
-                f"[download] {percent} de mídia · {speed} · ETA {eta}".strip()
+                f"[download] {percent:.1f}% · {_format_bytes(downloaded)} de "
+                f"{_format_bytes(total)} · {speed} · ETA {eta}".strip()
             )
         elif state == "finished":
-            callback.onProgress("[download] 90.0% Fluxo recebido; processando mídia…")
+            completed_tracks = min(expected_tracks, completed_tracks + 1)
+            percent = min(88.0, completed_tracks * (88 / max(1, expected_tracks)))
+            callback.onProgress(
+                f"[download] {percent:.1f}% Faixa recebida; preparando próxima etapa…"
+            )
 
     return hook
 
@@ -141,6 +194,7 @@ def download(
     callback,
 ):
     os.makedirs(work_dir, exist_ok=True)
+    expected_tracks = 1 if media_format in {"mp3", "flac", "wav", "m4a"} else 2
     options = {
         "concurrent_fragment_downloads": max(1, min(int(concurrent_fragments), 4)),
         "continuedl": True,
@@ -153,7 +207,7 @@ def download(
         "noplaylist": True,
         "outtmpl": os.path.join(work_dir, "%(title).150B [%(id)s].%(ext)s"),
         "overwrites": False,
-        "progress_hooks": [_progress_hook(callback)],
+        "progress_hooks": [_progress_hook(callback, expected_tracks)],
         "quiet": True,
         "retries": 5,
         "fragment_retries": 5,

@@ -9,6 +9,7 @@ Default permissions for the plugin
 - `allow-start-download`
 - `allow-open-downloads-folder`
 - `allow-open-external-url`
+- `allow-read-clipboard`
 - `allow-control-download`
 - `allow-get-download-state`
 - `allow-get-download-history`
@@ -338,6 +339,32 @@ Enables the open_external_url command without any pre-configured scope.
 <td>
 
 Denies the open_external_url command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mobile-downloader:allow-read-clipboard`
+
+</td>
+<td>
+
+Enables the read_clipboard command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mobile-downloader:deny-read-clipboard`
+
+</td>
+<td>
+
+Denies the read_clipboard command without any pre-configured scope.
 
 </td>
 </tr>

@@ -37,6 +37,10 @@ impl<R: Runtime> MobileDownloader<R> {
         Err(crate::Error::Unsupported)
     }
 
+    pub fn read_clipboard(&self) -> crate::Result<ClipboardResponse> {
+        Err(crate::Error::Unsupported)
+    }
+
     pub fn control_download(
         &self,
         _payload: DownloadControlRequest,

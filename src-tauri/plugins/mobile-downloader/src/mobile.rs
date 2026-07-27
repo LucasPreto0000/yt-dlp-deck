@@ -59,6 +59,12 @@ impl<R: Runtime> MobileDownloader<R> {
             .map_err(Into::into)
     }
 
+    pub fn read_clipboard(&self) -> crate::Result<ClipboardResponse> {
+        self.0
+            .run_mobile_plugin("readClipboard", ())
+            .map_err(Into::into)
+    }
+
     pub fn control_download(
         &self,
         payload: DownloadControlRequest,
