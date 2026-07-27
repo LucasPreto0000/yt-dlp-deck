@@ -2120,6 +2120,31 @@ input:focus {
   color: var(--green);
 }
 
+.mobile-continue-fab {
+  position: fixed;
+  right: max(18px, env(safe-area-inset-right));
+  bottom: max(18px, env(safe-area-inset-bottom));
+  z-index: 40;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 50px;
+  padding: 0 20px;
+  border: 1px solid rgba(255, 154, 119, 0.42);
+  border-radius: 999px;
+  color: #fff;
+  background: linear-gradient(135deg, #ff7049, #d9422e);
+  box-shadow:
+    0 16px 38px rgba(218, 64, 42, 0.38),
+    0 0 0 5px rgba(255, 112, 73, 0.08);
+  font-weight: 800;
+  cursor: var(--cursor-pointer);
+}
+
+.mobile-continue-fab:active {
+  transform: scale(0.97);
+}
+
 .spin {
   animation: spin 0.8s linear infinite;
   cursor: var(--cursor-wait);
@@ -2439,6 +2464,7 @@ input {
 
   .main-stage {
     grid-row: 3;
+    padding-bottom: 84px;
   }
 
   .settings-layout,
@@ -2596,7 +2622,7 @@ input {
     }
 
     .main-stage {
-      padding-bottom: env(safe-area-inset-bottom);
+      padding-bottom: max(84px, env(safe-area-inset-bottom));
     }
 
     .video-preview-backdrop {

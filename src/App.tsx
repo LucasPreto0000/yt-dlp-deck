@@ -185,6 +185,7 @@ const ChoiceCard = memo(function ChoiceCard({
   description,
   tag,
   onClick,
+  onDoubleClick,
 }: {
   active: boolean;
   icon: LucideIcon;
@@ -193,6 +194,7 @@ const ChoiceCard = memo(function ChoiceCard({
   description: string;
   tag?: string;
   onClick: () => void;
+  onDoubleClick?: () => void;
 }) {
   return (
     <motion.button
@@ -200,6 +202,7 @@ const ChoiceCard = memo(function ChoiceCard({
       className={`choice-card ${active ? "is-active" : ""}`}
       style={{ "--card-color": color } as React.CSSProperties}
       onClick={onClick}
+      onDoubleClick={onDoubleClick}
       whileHover={{ y: -6 }}
       whileTap={{ scale: 0.98 }}
     >
@@ -228,12 +231,14 @@ const MediaCard = memo(function MediaCard({
   media,
   selected,
   onClick,
+  onDoubleClick,
   onPreview,
   large = false,
 }: {
   media: SearchResult;
   selected: boolean;
   onClick?: () => void;
+  onDoubleClick?: () => void;
   onPreview?: (trigger: HTMLButtonElement) => void;
   large?: boolean;
 }) {
@@ -248,6 +253,7 @@ const MediaCard = memo(function MediaCard({
           type="button"
           className="media-select-hitbox"
           onClick={onClick}
+          onDoubleClick={onDoubleClick}
           aria-label={`Selecionar ${media.title}`}
           aria-pressed={selected}
         >
@@ -967,6 +973,10 @@ function App() {
               title={item.label}
               description={item.description}
               onClick={() => choosePlatform(item.id)}
+              onDoubleClick={() => {
+                choosePlatform(item.id);
+                if (item.id !== "Outro") setStep(1);
+              }}
             />
           ))}
         </div>
@@ -985,6 +995,7 @@ function App() {
                 id="platform-folder"
                 value={platformFolder}
                 onChange={(event) => setPlatformFolder(event.target.value)}
+                onDoubleClick={() => platformFolder.trim() && setStep(1)}
                 placeholder="Ex.: Vimeo, Dailymotion ou Cursos"
                 autoFocus
               />
@@ -1060,6 +1071,7 @@ function App() {
                     value={directUrl}
                     onChange={(event) => setDirectUrl(event.target.value)}
                     onKeyDown={(event) => event.key === "Enter" && directUrl.trim() && goNext()}
+                    onDoubleClick={() => directUrl.trim() && setStep(2)}
                     placeholder={directUrlPlaceholder}
                   />
                   <button className="soft-button" onClick={pasteUrl} title="Colar URL">
@@ -1136,6 +1148,10 @@ function App() {
                     media={item}
                     selected={selectedResult === index}
                     onClick={() => chooseResult(item, index)}
+                    onDoubleClick={() => {
+                      chooseResult(item, index);
+                      setStep(2);
+                    }}
                     onPreview={(trigger) => previewResult(item, index, trigger)}
                   />
                 ))}
@@ -1176,6 +1192,10 @@ function App() {
                       description={item.description}
                       tag={item.category}
                       onClick={() => setFormat(item.id)}
+                      onDoubleClick={() => {
+                        setFormat(item.id);
+                        setStep(3);
+                      }}
                     />
                   ))}
               </div>
@@ -1224,6 +1244,10 @@ function App() {
                     key={item.id}
                     className={quality === item.id ? "is-active" : ""}
                     onClick={() => setQuality(item.id)}
+                    onDoubleClick={() => {
+                      setQuality(item.id);
+                      setStep(4);
+                    }}
                   >
                     <span className="radio-dot" />
                     <span>
@@ -1254,6 +1278,10 @@ function App() {
                     key={item.id}
                     className={cookies === item.id ? "is-active" : ""}
                     onClick={() => setCookies(item.id)}
+                    onDoubleClick={() => {
+                      setCookies(item.id);
+                      if (item.id !== "file") setStep(4);
+                    }}
                   >
                     <Icon size={18} />
                     <span>
@@ -1668,6 +1696,21 @@ function App() {
               </div>
             )}
           </motion.div>
+        </AnimatePresence>
+        <AnimatePresence>
+          {isAndroidRuntime && step < steps.length - 1 && validStep && (
+            <motion.button
+              type="button"
+              className="mobile-continue-fab"
+              onClick={goNext}
+              initial={{ opacity: 0, y: 24, scale: 0.92 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 18, scale: 0.94 }}
+              transition={transition}
+            >
+              Continuar <ArrowRight size={18} />
+            </motion.button>
+          )}
         </AnimatePresence>
       </main>
       <AnimatePresence onExitComplete={() => previewTriggerRef.current?.focus()}>

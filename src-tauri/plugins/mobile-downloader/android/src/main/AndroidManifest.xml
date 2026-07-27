@@ -11,6 +11,17 @@
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
 
+    <queries>
+        <package android:name="ru.zdevs.zarchiver" />
+        <package android:name="me.zhanghai.android.files" />
+        <package android:name="pl.solidexplorer2" />
+        <package android:name="com.mixplorer" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="vnd.android.document/directory" />
+        </intent>
+    </queries>
+
     <application>
         <service
             android:name=".DownloadForegroundService"

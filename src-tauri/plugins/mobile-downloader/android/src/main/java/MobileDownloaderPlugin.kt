@@ -15,12 +15,16 @@ import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Environment
 import android.os.PowerManager
+import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.webkit.WebView
 import androidx.activity.result.ActivityResult
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.documentfile.provider.DocumentFile
 import app.tauri.annotation.ActivityCallback
 import app.tauri.annotation.Command
@@ -42,6 +46,7 @@ import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.OutputStream
 import java.util.Locale
 import java.util.UUID
 
@@ -117,7 +122,12 @@ private class PythonProgress(
     private fun append(line: String) {
         val percent = PROGRESS.find(line)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
         if (percent != null) record.percent = percent.coerceIn(0.0, 100.0)
-        record.status = if (DownloadRuntime.isPaused()) "paused" else "running"
+        record.status = when {
+            DownloadRuntime.isPaused() -> "paused"
+            line.contains("Salvando", ignoreCase = true) -> "saving"
+            line.contains("FFmpeg", ignoreCase = true) -> "processing"
+            else -> "running"
+        }
         record.message = when {
             DownloadRuntime.isPaused() -> "Download pausado"
             line.contains("ETA", ignoreCase = true) -> line.substringAfter("de mídia · ", line)
@@ -162,7 +172,12 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
 
     override fun load(webView: WebView) {
         pendingSharedUrl = extractSharedUrl(activity.intent)
+        enableImmersiveNavigation()
         ioScope.launch { recoverInterruptedJobs() }
+    }
+
+    override fun onResume() {
+        enableImmersiveNavigation()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -269,9 +284,12 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
                 emitRecordState(record)
 
                 val converted = processMedia(result, request.format, workDir, progress)
-                progress.onProgress("[download] 97.0% Salvando na pasta Downloads…")
                 record.status = "saving"
-                val saved = saveToDownloads(converted, platform)
+                record.message = "Salvando na pasta de destino…"
+                store.save(record)
+                emitRecordState(record)
+                progress.onProgress("[download] 97.0% Salvando na pasta de destino…")
+                val saved = saveToDownloads(converted, platform, progress)
                 record.status = "completed"
                 record.percent = 100.0
                 record.message = "Download concluído com sucesso."
@@ -431,7 +449,23 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
             check(baseIntent.resolveActivity(activity.packageManager) != null) {
                 "Nenhum explorador de arquivos compatível foi encontrado."
             }
-            activity.startActivity(Intent.createChooser(baseIntent, "Abrir pasta com…"))
+            val folderUri = selectedTree ?: MediaStore.Downloads.EXTERNAL_CONTENT_URI
+            val explorerIntents = FILE_MANAGER_PACKAGES.mapNotNull { packageName ->
+                val folderIntent = Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(folderUri, DocumentsContract.Document.MIME_TYPE_DIR)
+                    .setPackage(packageName)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                if (folderIntent.resolveActivity(activity.packageManager) != null) {
+                    folderIntent
+                } else {
+                    activity.packageManager.getLaunchIntentForPackage(packageName)
+                }
+            }
+            val chooser = Intent.createChooser(baseIntent, "Abrir pasta com…")
+            if (explorerIntents.isNotEmpty()) {
+                chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, explorerIntents.toTypedArray())
+            }
+            activity.startActivity(chooser)
             JSObject().apply { put("ok", true) }
         }.onSuccess(invoke::resolve).onFailure { reject(invoke, it) }
     }
@@ -617,6 +651,18 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
         }
     }
 
+    private fun enableImmersiveNavigation() {
+        activity.runOnUiThread {
+            val controller = WindowCompat.getInsetsController(
+                activity.window,
+                activity.window.decorView,
+            )
+            controller.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.navigationBars())
+        }
+    }
+
     private fun python(): Python {
         if (!Python.isStarted()) Python.start(AndroidPlatform(activity))
         return Python.getInstance()
@@ -747,7 +793,11 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
         return listOf("-y", "-i", input.absolutePath, "-vn") + codec + listOf(output.absolutePath)
     }
 
-    private fun saveToDownloads(source: File, platform: String): SavedMedia {
+    private fun saveToDownloads(
+        source: File,
+        platform: String,
+        progress: PythonProgress,
+    ): SavedMedia {
         selectedTreeUri()?.let { treeUri ->
             val root = checkNotNull(DocumentFile.fromTreeUri(activity, treeUri)) {
                 "A pasta escolhida não está mais disponível."
@@ -761,7 +811,7 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
             ) { "Não foi possível criar o arquivo na pasta escolhida." }
             activity.contentResolver.openOutputStream(document.uri, "w").use { output ->
                 checkNotNull(output) { "Não foi possível abrir o arquivo de destino." }
-                source.inputStream().use { input -> input.copyTo(output) }
+                copyWithProgress(source, output, progress)
             }
             return SavedMedia(document.uri, "Pasta escolhida/YT-DLP Deck/$platform")
         }
@@ -783,7 +833,7 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
             try {
                 resolver.openOutputStream(uri).use { output ->
                     checkNotNull(output) { "Não foi possível abrir o arquivo de destino." }
-                    source.inputStream().use { input -> input.copyTo(output) }
+                    copyWithProgress(source, output, progress)
                 }
                 resolver.update(
                     uri,
@@ -804,7 +854,9 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
             "YT-DLP Deck/$platform/${source.name}",
         )
         destination.parentFile?.mkdirs()
-        source.copyTo(destination, overwrite = true)
+        destination.outputStream().use { output ->
+            copyWithProgress(source, output, progress)
+        }
         MediaScannerConnection.scanFile(
             activity,
             arrayOf(destination.absolutePath),
@@ -812,6 +864,47 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
             null,
         )
         return SavedMedia(Uri.fromFile(destination), "Downloads/YT-DLP Deck/$platform")
+    }
+
+    private fun copyWithProgress(
+        source: File,
+        output: OutputStream,
+        progress: PythonProgress,
+    ) {
+        val total = source.length().coerceAtLeast(1L)
+        val buffer = ByteArray(COPY_BUFFER_BYTES)
+        var copied = 0L
+        var lastUpdate = 0L
+        source.inputStream().buffered(COPY_BUFFER_BYTES).use { input ->
+            while (true) {
+                DownloadRuntime.checkpoint()
+                val count = input.read(buffer)
+                if (count < 0) break
+                output.write(buffer, 0, count)
+                copied += count
+                val now = System.currentTimeMillis()
+                if (now - lastUpdate >= 250 || copied >= total) {
+                    val percent = 97.0 + (copied.toDouble() / total * 2.5)
+                    progress.onProgress(
+                        "[download] ${"%.1f".format(Locale.US, percent)}% Salvando " +
+                            "${humanBytes(copied)} de ${humanBytes(total)}…",
+                    )
+                    lastUpdate = now
+                }
+            }
+        }
+        output.flush()
+    }
+
+    private fun humanBytes(value: Long): String {
+        val units = arrayOf("B", "KiB", "MiB", "GiB")
+        var amount = value.toDouble()
+        var unit = 0
+        while (amount >= 1024 && unit < units.lastIndex) {
+            amount /= 1024
+            unit += 1
+        }
+        return "%.2f %s".format(Locale.US, amount, units[unit])
     }
 
     private fun withDownloadItem(invoke: Invoke, operation: (MobileDownloadRecord) -> Unit) {
@@ -945,8 +1038,15 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
         private const val DOWNLOAD_TREE_KEY = "download_tree_uri"
         private const val MIN_FREE_SPACE_BYTES = 256L * 1024L * 1024L
         private const val MAX_COOKIE_FILE_BYTES = 10L * 1024L * 1024L
+        private const val COPY_BUFFER_BYTES = 1024 * 1024
         private const val PARTIAL_RETENTION_MILLIS = 7L * 24L * 60L * 60L * 1000L
         private val AUDIO_FORMATS = setOf("mp3", "flac", "wav", "m4a")
+        private val FILE_MANAGER_PACKAGES = listOf(
+            "ru.zdevs.zarchiver",
+            "me.zhanghai.android.files",
+            "pl.solidexplorer2",
+            "com.mixplorer",
+        )
         private val ACTIVE_STATUSES = setOf("queued", "running", "paused", "processing", "saving")
         private val URL_PATTERN = Regex("""https?://[^\s]+""", RegexOption.IGNORE_CASE)
     }
