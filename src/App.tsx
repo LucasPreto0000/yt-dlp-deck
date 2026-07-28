@@ -7,11 +7,15 @@ import {
   ArrowRight,
   AudioLines,
   Check,
+  CheckCheck,
   CheckCircle2,
   Chrome,
+  CirclePause,
+  CirclePlay,
   Clipboard,
   Clock3,
   Compass,
+  Copy,
   Cookie,
   Disc3,
   Download,
@@ -24,6 +28,8 @@ import {
   Gauge,
   Globe2,
   HardDriveDownload,
+  History,
+  Info,
   Instagram,
   Link2,
   ListVideo,
@@ -44,6 +50,7 @@ import {
   Sparkles,
   SquareTerminal,
   Trash2,
+  TriangleAlert,
   Twitter,
   UserRound,
   Video,
@@ -159,20 +166,158 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
 const isAudio = (format: FormatId | null) =>
   format === "mp3" || format === "flac" || format === "wav" || format === "m4a";
 
+type ToastTone = "info" | "success" | "error";
+
+interface ToastItem {
+  id: number;
+  tone: ToastTone;
+  title: string;
+  message: string;
+}
+
+interface DesktopHistoryRecord {
+  id: string;
+  title: string;
+  url: string;
+  status: "completed" | "failed";
+  percent: number;
+  message: string;
+  outputDir: string;
+  createdAt: number;
+}
+
+type HistoryRecord = Pick<
+  MobileDownloadRecord,
+  "id" | "title" | "url" | "status" | "percent" | "message" | "outputDir" | "createdAt"
+> & {
+  fileUri?: string | null;
+};
+
+type DownloadVisualStatus =
+  | "idle"
+  | "queued"
+  | "running"
+  | "paused"
+  | "processing"
+  | "saving"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+interface DownloadTelemetry {
+  size: string;
+  speed: string;
+  eta: string;
+}
+
+function getConsoleLineTone(line: string) {
+  const normalized = line.toLowerCase();
+  if (normalized.includes("error") || normalized.includes("erro:") || normalized.includes("failed")) {
+    return "error";
+  }
+  if (normalized.includes("warning") || normalized.includes("aviso")) return "warning";
+  if (normalized.includes("[download]") || normalized.includes("%")) return "progress";
+  if (
+    normalized.includes("[info]") ||
+    normalized.includes("[sistema]") ||
+    normalized.includes("destination")
+  ) {
+    return "info";
+  }
+  return "default";
+}
+
+function readDownloadTelemetry(lines: string[]): DownloadTelemetry {
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (!line.includes("[download]")) continue;
+    const size = line.match(/\bof\s+~?([0-9.]+\s*[KMGT]i?B)/i)?.[1] || "Calculando";
+    const speed = line.match(/\bat\s+([0-9.]+\s*[KMGT]i?B\/s)/i)?.[1] || "Calculando";
+    const eta = line.match(/\bETA\s+([0-9:]+)/i)?.[1] || "—";
+    return { size, speed, eta };
+  }
+  return { size: "Calculando", speed: "Calculando", eta: "—" };
+}
+
+function historyDateLabel(timestamp: number) {
+  const current = new Date();
+  const date = new Date(timestamp);
+  const currentDay = new Date(current.getFullYear(), current.getMonth(), current.getDate()).getTime();
+  const recordDay = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const dayDifference = Math.round((currentDay - recordDay) / 86_400_000);
+  if (dayDifference === 0) return "Hoje";
+  if (dayDifference === 1) return "Ontem";
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "long",
+    year: date.getFullYear() === current.getFullYear() ? undefined : "numeric",
+  }).format(date);
+}
+
+function groupHistory(items: HistoryRecord[]) {
+  const groups = new Map<string, HistoryRecord[]>();
+  items.forEach((item) => {
+    const label = historyDateLabel(item.createdAt);
+    groups.set(label, [...(groups.get(label) || []), item]);
+  });
+  return Array.from(groups, ([label, records]) => ({ label, records }));
+}
+
+function ToastViewport({ items }: { items: ToastItem[] }) {
+  return (
+    <div className="toast-viewport" aria-live="polite" aria-atomic="false">
+      <AnimatePresence initial={false}>
+        {items.map((item) => {
+          const Icon = item.tone === "success"
+            ? CheckCircle2
+            : item.tone === "error"
+              ? TriangleAlert
+              : Info;
+          return (
+            <motion.div
+              className={`toast-card is-${item.tone}`}
+              key={item.id}
+              initial={{ opacity: 0, x: 32, scale: 0.96 }}
+              animate={{ opacity: 1, x: 0, scale: 1 }}
+              exit={{ opacity: 0, x: 24, scale: 0.97 }}
+              transition={transition}
+              role={item.tone === "error" ? "alert" : "status"}
+            >
+              <span className="toast-icon">
+                <Icon size={18} />
+              </span>
+              <span className="toast-copy">
+                <strong>{item.title}</strong>
+                <small>{item.message}</small>
+              </span>
+              <span className="toast-timer" />
+            </motion.div>
+          );
+        })}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 function ToolBadge({
   label,
   ready,
   version,
+  checking,
 }: {
   label: string;
   ready: boolean;
   version?: string;
+  checking: boolean;
 }) {
   return (
-    <div className={`tool-badge ${ready ? "is-ready" : ""}`} title={version}>
+    <div
+      className={`tool-badge ${ready ? "is-ready" : ""} ${checking ? "is-checking" : ""}`}
+      title={checking ? `Verificando ${label}` : version}
+    >
       <span className="tool-light" />
       <span>{label}</span>
-      {ready && <Check size={12} />}
+      {checking ? <LoaderCircle className="spin" size={12} /> : ready && <Check size={12} />}
     </div>
   );
 }
@@ -464,16 +609,29 @@ function App() {
   const [cookieFile, setCookieFile] = useState("");
   const [wifiOnly, setWifiOnly] = useState(false);
   const [tools, setTools] = useState<ToolStatus | null>(null);
+  const [checkingTools, setCheckingTools] = useState(true);
   const [downloading, setDownloading] = useState(false);
   const [downloadPercent, setDownloadPercent] = useState(0);
   const [downloadLines, setDownloadLines] = useState<string[]>([]);
   const [downloadMessage, setDownloadMessage] = useState("");
   const [downloadError, setDownloadError] = useState("");
+  const [consoleAutoScroll, setConsoleAutoScroll] = useState(true);
+  const [consoleCopied, setConsoleCopied] = useState(false);
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [desktopHistory, setDesktopHistory] = useState<DesktopHistoryRecord[]>(() => {
+    if (isAndroidRuntime) return [];
+    try {
+      const stored = JSON.parse(window.localStorage.getItem("yt-dlp-deck-history") || "[]");
+      return Array.isArray(stored) ? stored.slice(0, 40) : [];
+    } catch {
+      return [];
+    }
+  });
   const [mobileDownloadState, setMobileDownloadState] = useState<MobileDownloadState | null>(null);
   const [mobileHistory, setMobileHistory] = useState<MobileDownloadRecord[]>([]);
   const [mobileSettings, setMobileSettings] = useState<MobileSettings | null>(null);
   const [mobileActionBusy, setMobileActionBusy] = useState(false);
-  const consoleRef = useRef<HTMLPreElement>(null);
+  const consoleRef = useRef<HTMLDivElement>(null);
   const downloadBufferRef = useRef<string[]>([]);
   const downloadPercentRef = useRef(0);
   const downloadFlushRef = useRef<number | null>(null);
@@ -481,7 +639,18 @@ function App() {
   const previewTriggerRef = useRef<HTMLButtonElement | null>(null);
   const gpuCanvasRef = useRef<HTMLCanvasElement>(null);
   const gpuControllerRef = useRef<BackdropController | null>(null);
+  const toastIdRef = useRef(0);
+  const toastTimersRef = useRef<number[]>([]);
   const [gpuRenderer, setGpuRenderer] = useState("GPU iniciando");
+
+  const pushToast = useCallback((tone: ToastTone, title: string, message: string) => {
+    const id = ++toastIdRef.current;
+    setToasts((current) => [...current.slice(-2), { id, tone, title, message }]);
+    const timer = window.setTimeout(() => {
+      setToasts((current) => current.filter((item) => item.id !== id));
+    }, 4_200);
+    toastTimersRef.current.push(timer);
+  }, []);
 
   const selectedFormat = formats.find((item) => item.id === format);
   const selectedQuality = qualities.find((item) => item.id === quality);
@@ -509,6 +678,23 @@ function App() {
         : downloading
           ? "Transferindo mídia"
           : "Processo finalizado";
+
+  const downloadTelemetry = useMemo(() => readDownloadTelemetry(downloadLines), [downloadLines]);
+  const downloadVisualStatus: DownloadVisualStatus = downloadError
+    ? "failed"
+    : downloadMessage
+      ? "completed"
+      : mobileCurrentStatus || (downloading ? "running" : "idle");
+  const showDownloadActivity =
+    downloading || downloadLines.length > 0 || Boolean(downloadMessage) || Boolean(downloadError);
+  const downloadTitle =
+    selectedMedia?.title ||
+    (directUrl.trim() ? `${platformFolder || "Mídia"} · link direto` : "Nova transferência");
+  const historyItems = useMemo<HistoryRecord[]>(
+    () => isAndroidRuntime ? mobileHistory : desktopHistory,
+    [mobileHistory, desktopHistory],
+  );
+  const historyGroups = useMemo(() => groupHistory(historyItems), [historyItems]);
 
   const validStep = useMemo(() => {
     if (step === 0) return Boolean(platformFolder.trim());
@@ -649,8 +835,20 @@ function App() {
   }, [previewMedia]);
 
   useEffect(() => {
-    if (consoleRef.current) consoleRef.current.scrollTop = consoleRef.current.scrollHeight;
-  }, [downloadLines]);
+    if (consoleAutoScroll && consoleRef.current) {
+      consoleRef.current.scrollTo({ top: consoleRef.current.scrollHeight, behavior: "smooth" });
+    }
+  }, [downloadLines, consoleAutoScroll]);
+
+  useEffect(() => {
+    if (!isAndroidRuntime) {
+      window.localStorage.setItem("yt-dlp-deck-history", JSON.stringify(desktopHistory.slice(0, 40)));
+    }
+  }, [desktopHistory]);
+
+  useEffect(() => () => {
+    toastTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+  }, []);
 
   useEffect(() => {
     if (!isAndroidRuntime) return;
@@ -671,12 +869,28 @@ function App() {
     window.history.pushState({ ...window.history.state, deckStep: step }, "");
   }, [step]);
 
-  async function checkTools() {
+  async function checkTools(announce = false) {
+    setCheckingTools(true);
     try {
       const status = await appInvoke<ToolStatus>("get_tool_status");
       setTools(status);
-    } catch {
+      if (announce) {
+        const readyCount = Number(status.ytDlp) + Number(status.ffmpeg);
+        pushToast(
+          readyCount === 2 ? "success" : "info",
+          readyCount === 2 ? "Ferramentas prontas" : "Verificação concluída",
+          readyCount === 2
+            ? "yt-dlp e FFmpeg foram encontrados nesta instalação."
+            : `${readyCount} de 2 ferramentas foram encontradas.`,
+        );
+      }
+    } catch (error) {
       setTools(null);
+      if (announce) {
+        pushToast("error", "Falha na verificação", errorText(error));
+      }
+    } finally {
+      setCheckingTools(false);
     }
   }
 
@@ -851,11 +1065,14 @@ function App() {
       if (value) {
         setDirectUrl(value.trim());
         setSearchError("");
+        pushToast("success", "Link colado", "A URL foi adicionada ao campo de mídia.");
       } else {
         setSearchError("A área de transferência não contém um link.");
+        pushToast("info", "Nada para colar", "A área de transferência não contém um link.");
       }
     } catch (error) {
       setSearchError(`Não foi possível acessar a área de transferência: ${errorText(error)}`);
+      pushToast("error", "Falha ao colar", errorText(error));
     }
   }
 
@@ -904,6 +1121,8 @@ function App() {
 
   async function startDownload() {
     if (!format || downloading) return;
+    const startedAt = Date.now();
+    const desktopJobId = globalThis.crypto?.randomUUID?.() || `download-${startedAt}`;
     if (isAndroidRuntime) {
       setMobileActionBusy(true);
       try {
@@ -921,6 +1140,8 @@ function App() {
     }
     setDownloading(true);
     setDownloadPercent(0);
+    setConsoleAutoScroll(true);
+    setConsoleCopied(false);
     const initialLines = isAndroidRuntime
       ? ["[sistema] Abrindo console Android…", "[sistema] Preparando yt-dlp e FFmpeg incorporados…"]
       : [];
@@ -943,10 +1164,38 @@ function App() {
       setDownloadPercent(100);
       downloadPercentRef.current = 100;
       setDownloadMessage(`${result.message} Arquivos salvos em ${result.outputDir}`);
+      if (!isAndroidRuntime) {
+        const completedRecord: DesktopHistoryRecord = {
+          id: desktopJobId,
+          title: downloadTitle,
+          url: activeUrl.trim(),
+          status: "completed",
+          percent: 100,
+          message: result.message,
+          outputDir: result.outputDir,
+          createdAt: startedAt,
+        };
+        setDesktopHistory((current) => [completedRecord, ...current].slice(0, 40));
+      }
+      pushToast("success", "Download concluído", result.message);
     } catch (error) {
       const message = errorText(error);
       setDownloadError(message);
       setDownloadLines((current) => [...current, `ERRO: ${message}`]);
+      if (!isAndroidRuntime) {
+        const failedRecord: DesktopHistoryRecord = {
+          id: desktopJobId,
+          title: downloadTitle,
+          url: activeUrl.trim(),
+          status: "failed",
+          percent: downloadPercentRef.current,
+          message,
+          outputDir: platformFolder,
+          createdAt: startedAt,
+        };
+        setDesktopHistory((current) => [failedRecord, ...current].slice(0, 40));
+      }
+      pushToast("error", "O download falhou", message);
     } finally {
       setDownloading(false);
     }
@@ -957,6 +1206,62 @@ function App() {
       await appInvoke("open_downloads_folder", { platformFolder: platformFolder || null });
     } catch (error) {
       setDownloadError(errorText(error));
+      pushToast("error", "Não foi possível abrir a pasta", errorText(error));
+    }
+  }
+
+  async function copyConsoleLog() {
+    if (!downloadLines.length) return;
+    try {
+      await navigator.clipboard.writeText(downloadLines.join("\n"));
+      setConsoleCopied(true);
+      pushToast("success", "Log copiado", `${downloadLines.length} linhas foram copiadas.`);
+      window.setTimeout(() => setConsoleCopied(false), 1_800);
+    } catch (error) {
+      pushToast("error", "Falha ao copiar o log", errorText(error));
+    }
+  }
+
+  async function copyCommand() {
+    const command = commandPreview();
+    if (!command) return;
+    try {
+      await navigator.clipboard.writeText(command);
+      pushToast("success", "Comando copiado", "A prévia segura foi enviada para a área de transferência.");
+    } catch (error) {
+      pushToast("error", "Falha ao copiar o comando", errorText(error));
+    }
+  }
+
+  function handleConsoleScroll(event: React.UIEvent<HTMLDivElement>) {
+    const element = event.currentTarget;
+    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+    setConsoleAutoScroll(distanceFromBottom < 28);
+  }
+
+  async function historyOpen(item: HistoryRecord) {
+    if (isAndroidRuntime) {
+      await mobileHistoryAction("open_download_item", item.id);
+    } else {
+      await openFolder();
+    }
+  }
+
+  async function historyDelete(item: HistoryRecord) {
+    if (isAndroidRuntime) {
+      await mobileHistoryAction("delete_download_item", item.id);
+    } else {
+      setDesktopHistory((current) => current.filter((record) => record.id !== item.id));
+      pushToast("info", "Item removido", "O registro foi retirado do histórico local.");
+    }
+  }
+
+  async function clearHistoryLibrary() {
+    if (isAndroidRuntime) {
+      await clearMobileHistory();
+    } else {
+      setDesktopHistory([]);
+      pushToast("info", "Histórico limpo", "Os registros desta instalação foram removidos.");
     }
   }
 
@@ -1433,6 +1738,18 @@ function App() {
 
   function renderReview() {
     const chosenMedia = sourceMode === "search" ? selectedMedia : null;
+    const StatusIcon = downloadVisualStatus === "completed"
+      ? CheckCheck
+      : downloadVisualStatus === "failed" || downloadVisualStatus === "cancelled"
+        ? TriangleAlert
+        : downloadVisualStatus === "paused"
+          ? CirclePause
+          : downloadVisualStatus === "idle"
+            ? HardDriveDownload
+            : Activity;
+    const visualStatusLabel = downloadVisualStatus === "idle"
+      ? "Pronto"
+      : mobileStatusLabels[downloadVisualStatus] || downloadStageLabel;
     return (
       <>
         <PageHeader
@@ -1481,14 +1798,35 @@ function App() {
                 <i className="terminal-dot yellow" />
                 <i className="terminal-dot green" />
               </span>
-              <span>
-                <SquareTerminal size={14} /> comando seguro
-              </span>
+              <div className="terminal-head-tools">
+                <span>
+                  <SquareTerminal size={14} /> comando seguro
+                </span>
+                <button type="button" onClick={copyCommand} title="Copiar comando">
+                  <Copy size={14} /> Copiar
+                </button>
+              </div>
             </div>
             <pre>{commandPreview()}</pre>
           </section>
         </div>
-        <section className="download-station">
+        <section className={`download-station status-${downloadVisualStatus}`}>
+          <header className="download-station-head">
+            <div>
+              <span className="station-mark">
+                <HardDriveDownload size={20} />
+              </span>
+              <span>
+                <small>Central de execução</small>
+                <strong>Download e telemetria</strong>
+              </span>
+            </div>
+            <span className={`download-status-pill status-${downloadVisualStatus}`}>
+              <StatusIcon size={15} />
+              {visualStatusLabel}
+            </span>
+          </header>
+
           <div className="download-actions">
             <button
               className="download-button"
@@ -1521,129 +1859,294 @@ function App() {
                 <Settings2 size={18} /> Escolher pasta
               </button>
             )}
-            {isAndroidRuntime && downloading && (
-              <>
-                <button
-                  className="folder-button mobile-control-button"
-                  onClick={() =>
-                    controlMobileDownload(mobileDownloadState?.paused ? "resume" : "pause")
-                  }
-                  disabled={mobileActionBusy || !mobileCanPause}
-                  title={mobileCanPause ? undefined : "O FFmpeg e o salvamento não podem ser pausados"}
-                >
-                  {mobileDownloadState?.paused ? <Play size={18} /> : <Pause size={18} />}
-                  {mobileDownloadState?.paused
-                    ? "Retomar"
-                    : mobileCanPause
-                      ? "Pausar"
-                      : "Pausa indisponível"}
-                </button>
-                <button
-                  className="folder-button mobile-control-button is-danger"
-                  onClick={() => controlMobileDownload("cancel")}
-                  disabled={mobileActionBusy}
-                >
-                  <X size={18} /> Cancelar
-                </button>
-              </>
-            )}
           </div>
-          {(downloading || downloadLines.length > 0 || downloadMessage || downloadError) && (
+
+          <AnimatePresence>
+            {showDownloadActivity && (
+              <motion.article
+                className={`download-job-card status-${downloadVisualStatus}`}
+                initial={{ opacity: 0, y: 14, scale: 0.985 }}
+                animate={{
+                  opacity: 1,
+                  y: 0,
+                  scale: 1,
+                  x: downloadVisualStatus === "failed" ? [0, -4, 4, -2, 2, 0] : 0,
+                }}
+                exit={{ opacity: 0, y: 10, scale: 0.99 }}
+                transition={downloadVisualStatus === "failed"
+                  ? { duration: 0.38 }
+                  : transition}
+              >
+                <div className="download-job-thumbnail">
+                  {chosenMedia?.thumbnail ? (
+                    <img src={chosenMedia.thumbnail} alt="" />
+                  ) : (
+                    <HardDriveDownload size={28} />
+                  )}
+                  <motion.span
+                    className={`job-state-icon status-${downloadVisualStatus}`}
+                    animate={downloadVisualStatus === "completed"
+                      ? { scale: [0.75, 1.16, 1], rotate: [-12, 4, 0] }
+                      : { scale: 1, rotate: 0 }}
+                  >
+                    <StatusIcon size={16} />
+                  </motion.span>
+                </div>
+
+                <div className="download-job-body">
+                  <div className="download-job-title">
+                    <span>
+                      <small>Item atual</small>
+                      <strong>{downloadTitle}</strong>
+                    </span>
+                    <span className="job-percent">{Math.round(downloadPercent)}%</span>
+                  </div>
+                  <p>{activeUrl}</p>
+                  <div className="download-telemetry">
+                    <span>
+                      <small>Tamanho</small>
+                      <strong>{downloadTelemetry.size}</strong>
+                    </span>
+                    <span>
+                      <small>Velocidade</small>
+                      <strong>{downloadTelemetry.speed}</strong>
+                    </span>
+                    <span>
+                      <small>Tempo restante</small>
+                      <strong>{downloadTelemetry.eta}</strong>
+                    </span>
+                  </div>
+                  <div
+                    className="job-progress-track"
+                    role="progressbar"
+                    aria-label="Progresso do download"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={Math.round(downloadPercent)}
+                  >
+                    <motion.i
+                      animate={{ width: `${downloadPercent}%` }}
+                      transition={{ type: "spring", stiffness: 105, damping: 22 }}
+                    />
+                    <span style={{ left: `${Math.min(100, Math.max(0, downloadPercent))}%` }} />
+                  </div>
+                </div>
+
+                <div className="download-job-actions">
+                  <button type="button" onClick={openFolder} title="Abrir pasta">
+                    <FolderOpen size={16} />
+                    <span>Abrir pasta</span>
+                  </button>
+                  {isAndroidRuntime && downloading && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          controlMobileDownload(mobileDownloadState?.paused ? "resume" : "pause")
+                        }
+                        disabled={mobileActionBusy || !mobileCanPause}
+                        title={mobileCanPause ? undefined : "Pausa indisponível durante o processamento"}
+                      >
+                        {mobileDownloadState?.paused ? <CirclePlay size={16} /> : <CirclePause size={16} />}
+                        <span>{mobileDownloadState?.paused ? "Retomar" : "Pausar"}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="is-danger"
+                        onClick={() => controlMobileDownload("cancel")}
+                        disabled={mobileActionBusy}
+                      >
+                        <X size={16} />
+                        <span>Cancelar</span>
+                      </button>
+                    </>
+                  )}
+                </div>
+              </motion.article>
+            )}
+          </AnimatePresence>
+
+          <AnimatePresence mode="popLayout">
+            {downloadMessage && (
+              <motion.div
+                className="success-message"
+                role="status"
+                aria-live="polite"
+                initial={{ opacity: 0, y: 8, scale: 0.985 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -6 }}
+              >
+                <CheckCircle2 size={17} /> {downloadMessage}
+              </motion.div>
+            )}
+            {downloadError && <InlineError message={downloadError} />}
+          </AnimatePresence>
+
+          {(downloadLines.length > 0 || (isAndroidRuntime && downloading)) && (
             <motion.div
-              className="download-progress"
+              className="live-console-shell"
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
+              transition={transition}
             >
-              <div className="progress-caption">
+              <div className="live-console-head">
                 <span>
-                  <Activity size={14} /> {downloadStageLabel}
+                  <SquareTerminal size={14} />
+                  <span>
+                    <strong>console yt-dlp + FFmpeg</strong>
+                    <small>{downloadLines.length} linhas · {isAndroidRuntime ? "Android" : "Windows"} nativo</small>
+                  </span>
                 </span>
-                <strong>{Math.round(downloadPercent)}%</strong>
+                <div className="console-actions">
+                  <button
+                    type="button"
+                    className={consoleAutoScroll ? "is-live" : ""}
+                    onClick={() => setConsoleAutoScroll((current) => !current)}
+                    title={consoleAutoScroll ? "Pausar acompanhamento" : "Retomar acompanhamento"}
+                  >
+                    {consoleAutoScroll ? <Pause size={14} /> : <Play size={14} />}
+                    {consoleAutoScroll ? "Ao vivo" : "Pausado"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={copyConsoleLog}
+                    disabled={!downloadLines.length}
+                    title="Copiar log"
+                  >
+                    {consoleCopied ? <Check size={14} /> : <Copy size={14} />}
+                    {consoleCopied ? "Copiado" : "Copiar"}
+                  </button>
+                </div>
               </div>
               <div
-                className="progress-track"
-                role="progressbar"
-                aria-label="Progresso do download"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={Math.round(downloadPercent)}
+                className="live-console"
+                ref={consoleRef}
+                role="log"
+                tabIndex={0}
+                onScroll={handleConsoleScroll}
+                aria-label="Saída em tempo real do yt-dlp e FFmpeg"
               >
-                <motion.i animate={{ width: `${downloadPercent}%` }} transition={{ duration: 0.35 }} />
+                {downloadLines.length ? (
+                  downloadLines.map((line, index) => (
+                    <span className={`console-line is-${getConsoleLineTone(line)}`} key={`${index}-${line}`}>
+                      <i>{String(index + 1).padStart(3, "0")}</i>
+                      <code>{line}</code>
+                    </span>
+                  ))
+                ) : (
+                  <span className="console-line is-info">
+                    <i>001</i>
+                    <code>[sistema] Aguardando saída do yt-dlp…</code>
+                  </span>
+                )}
               </div>
-              {downloadMessage && (
-                <div className="success-message" role="status" aria-live="polite">
-                  <CheckCircle2 size={17} /> {downloadMessage}
-                </div>
-              )}
-              {downloadError && <InlineError message={downloadError} />}
-              {(downloadLines.length > 0 || (isAndroidRuntime && downloading)) && (
-                <div className="live-console-shell">
-                  <div className="live-console-head">
-                    <span><SquareTerminal size={14} /> console yt-dlp + FFmpeg</span>
-                    <small>{isAndroidRuntime ? "Android nativo" : "Windows nativo"}</small>
-                  </div>
-                  <pre className="live-console" ref={consoleRef}>
-                    {downloadLines.length
-                      ? downloadLines.join("\n")
-                      : "[sistema] Aguardando saída do yt-dlp…"}
-                  </pre>
-                </div>
-              )}
             </motion.div>
           )}
         </section>
-        {isAndroidRuntime && (
-          <section className="mobile-download-library">
-            <div className="mobile-library-head">
-              <div>
-                <span>Biblioteca Android</span>
-                <small>Histórico persistente de downloads</small>
-              </div>
-              {mobileHistory.length > 0 && (
-                <button onClick={clearMobileHistory} disabled={mobileActionBusy}>
-                  <Trash2 size={15} /> Limpar finalizados
-                </button>
-              )}
+        <section className="mobile-download-library history-library">
+          <div className="mobile-library-head">
+            <div>
+              <span><History size={17} /> Histórico</span>
+              <small>
+                {isAndroidRuntime
+                  ? "Biblioteca persistente de downloads"
+                  : "Atividade salva localmente nesta instalação"}
+              </small>
             </div>
-            {mobileHistory.length === 0 ? (
-              <div className="mobile-library-empty">
-                Seus downloads concluídos aparecerão aqui.
-              </div>
-            ) : (
-              <div className="mobile-history-list">
-                {mobileHistory.slice(0, 12).map((item) => (
-                  <article className={`mobile-history-item status-${item.status}`} key={item.id}>
-                    <div className="mobile-history-main">
-                      <strong>{item.title || item.fileName || "Download"}</strong>
-                      <span>{mobileStatusLabels[item.status] || item.status} · {Math.round(item.percent)}%</span>
-                      <small>{item.message}</small>
-                    </div>
-                    <div className="mobile-history-actions">
-                      {item.status === "completed" && item.fileUri && (
-                        <>
-                          <button onClick={() => mobileHistoryAction("open_download_item", item.id)}>
-                            <Play size={14} /> Abrir
-                          </button>
-                          <button onClick={() => mobileHistoryAction("share_download_item", item.id)}>
-                            <Share2 size={14} /> Compartilhar
-                          </button>
-                        </>
-                      )}
-                      {!["queued", "running", "paused", "processing", "saving"].includes(item.status) && (
-                        <button
-                          className="is-danger"
-                          onClick={() => mobileHistoryAction("delete_download_item", item.id)}
-                        >
-                          <Trash2 size={14} /> Excluir
-                        </button>
-                      )}
-                    </div>
-                  </article>
-                ))}
-              </div>
+            {historyItems.length > 0 && (
+              <button onClick={() => void clearHistoryLibrary()} disabled={mobileActionBusy}>
+                <Trash2 size={15} /> Limpar finalizados
+              </button>
             )}
-          </section>
-        )}
+          </div>
+          {historyItems.length === 0 ? (
+            <motion.div
+              className="mobile-library-empty history-empty-state"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+            >
+              <span><History size={24} /></span>
+              <strong>Nenhum download no histórico</strong>
+              <small>As tarefas finalizadas aparecerão aqui, organizadas por data.</small>
+            </motion.div>
+          ) : (
+            <div className="history-groups">
+              {historyGroups.map((group) => (
+                <section className="history-date-group" key={group.label}>
+                  <div className="history-date-label">
+                    <span>{group.label}</span>
+                    <i />
+                    <small>{group.records.length} {group.records.length === 1 ? "item" : "itens"}</small>
+                  </div>
+                  <div className="mobile-history-list">
+                    {group.records.slice(0, 12).map((item, index) => {
+                      const RecordIcon = item.status === "completed"
+                        ? CheckCircle2
+                        : item.status === "failed" || item.status === "cancelled"
+                          ? TriangleAlert
+                          : item.status === "paused"
+                            ? CirclePause
+                            : Activity;
+                      const isActiveRecord = ["queued", "running", "paused", "processing", "saving"].includes(item.status);
+                      return (
+                        <motion.article
+                          className={`mobile-history-item status-${item.status}`}
+                          key={item.id}
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ ...transition, delay: Math.min(index * 0.045, 0.22) }}
+                        >
+                          <span className="history-status-icon">
+                            <RecordIcon size={17} />
+                          </span>
+                          <div className="mobile-history-main">
+                            <strong>{item.title || "Download"}</strong>
+                            <span>
+                              {mobileStatusLabels[item.status] || item.status}
+                              <i>·</i>
+                              <b>{Math.round(item.percent)}%</b>
+                              <i>·</i>
+                              {new Intl.DateTimeFormat("pt-BR", {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              }).format(new Date(item.createdAt))}
+                            </span>
+                            <small>{item.message}</small>
+                            {isActiveRecord && (
+                              <div className="history-progress-track" aria-hidden="true">
+                                <motion.i
+                                  animate={{ width: `${item.percent}%` }}
+                                  transition={{ type: "spring", stiffness: 105, damping: 22 }}
+                                />
+                              </div>
+                            )}
+                          </div>
+                          <div className="mobile-history-actions">
+                            {item.status === "completed" && (!isAndroidRuntime || item.fileUri) && (
+                              <button onClick={() => void historyOpen(item)}>
+                                <FolderOpen size={14} /> Abrir
+                              </button>
+                            )}
+                            {isAndroidRuntime && item.status === "completed" && item.fileUri && (
+                              <button onClick={() => mobileHistoryAction("share_download_item", item.id)}>
+                                <Share2 size={14} /> Compartilhar
+                              </button>
+                            )}
+                            {!isActiveRecord && (
+                              <button className="is-danger" onClick={() => void historyDelete(item)}>
+                                <Trash2 size={14} /> Excluir
+                              </button>
+                            )}
+                          </div>
+                        </motion.article>
+                      );
+                    })}
+                  </div>
+                </section>
+              ))}
+            </div>
+          )}
+        </section>
       </>
     );
   }
@@ -1686,8 +2189,18 @@ function App() {
           <span>{step + 1} de {steps.length}</span>
         </div>
         <div className="tools">
-          <ToolBadge label="yt-dlp" ready={Boolean(tools?.ytDlp)} version={tools?.ytDlpVersion} />
-          <ToolBadge label="FFmpeg" ready={Boolean(tools?.ffmpeg)} version={tools?.ffmpegVersion} />
+          <ToolBadge
+            label="yt-dlp"
+            ready={Boolean(tools?.ytDlp)}
+            version={tools?.ytDlpVersion}
+            checking={checkingTools}
+          />
+          <ToolBadge
+            label="FFmpeg"
+            ready={Boolean(tools?.ffmpeg)}
+            version={tools?.ffmpegVersion}
+            checking={checkingTools}
+          />
         </div>
       </header>
 
@@ -1752,8 +2265,9 @@ function App() {
                   Coloque <b>yt-dlp.exe</b> e <b>ffmpeg.exe</b> na mesma pasta do aplicativo.
                 </span>
               </div>
-              <button onClick={checkTools}>
-                <RotateCcw size={15} /> Checar novamente
+              <button onClick={() => void checkTools(true)} disabled={checkingTools}>
+                {checkingTools ? <LoaderCircle className="spin" size={15} /> : <RotateCcw size={15} />}
+                {checkingTools ? "Verificando" : "Checar novamente"}
               </button>
             </motion.div>
           )}
@@ -1814,6 +2328,7 @@ function App() {
           />
         )}
       </AnimatePresence>
+      <ToastViewport items={toasts} />
     </div>
     </MotionConfig>
   );
