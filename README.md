@@ -7,9 +7,9 @@ FEITO INTEIRAMENTE POR IA, ENTAO TERÁ BUGS!!!!
 
 ## Downloads oficiais
 
-- [Baixar para Windows (`yt-dlp-deck.exe`)](https://github.com/LucasPreto0000/yt-dlp-deck/releases/download/v1.1.11/yt-dlp-deck.exe)
-- [Baixar para Android ARM64 (`.apk`)](https://github.com/LucasPreto0000/yt-dlp-deck/releases/download/v1.1.11/YT-DLP-Deck-Android-v1.1.11-arm64.apk)
-- [Ver a release completa e as notas da versão](https://github.com/LucasPreto0000/yt-dlp-deck/releases/tag/v1.1.11)
+- [Baixar para Windows (`yt-dlp-deck.exe`)](https://github.com/LucasPreto0000/yt-dlp-deck/releases/download/v1.1.12/yt-dlp-deck.exe)
+- [Baixar para Android ARM64 (`.apk`)](https://github.com/LucasPreto0000/yt-dlp-deck/releases/download/v1.1.12/YT-DLP-Deck-Android-v1.1.12-arm64.apk)
+- [Ver a release completa e as notas da versão](https://github.com/LucasPreto0000/yt-dlp-deck/releases/tag/v1.1.12)
 
 O APK é compatível com Android 13 ou superior em aparelhos ARM64. No Android,
 pode ser necessário permitir a instalação de aplicativos desconhecidos.
@@ -28,6 +28,8 @@ depois que os arquivos forem colocados na pasta.
 Quando os dois selos aparecem como prontos, clique em `yt-dlp` ou `FFmpeg` para
 procurar e instalar silenciosamente a atualização daquela ferramenta. O app
 valida o pacote do FFmpeg e restaura os executáveis anteriores se a troca falhar.
+As consultas reutilizam conexões e versões em cache, então verificações repetidas
+respondem quase instantaneamente sem abrir os executáveis novamente.
 
 Os arquivos baixados ficam em:
 
@@ -87,7 +89,7 @@ npm run android:build
 
 O resultado fica em:
 
-`src-tauri\target\android\YT-DLP-Deck-Android-v1.1.11-arm64.apk`
+`src-tauri\target\android\YT-DLP-Deck-Android-v1.1.12-arm64.apk`
 
 Para gerar um Android App Bundle:
 
@@ -97,7 +99,7 @@ npm run android:bundle
 
 O AAB fica em:
 
-`src-tauri\target\android\YT-DLP-Deck-Android-v1.1.11-arm64.aab`
+`src-tauri\target\android\YT-DLP-Deck-Android-v1.1.12-arm64.aab`
 
 Requisitos de compilação: JDK 17, Android SDK 36, Build Tools, NDK
 27.3.13750724 e os targets Rust do Android. O script também contorna o bloqueio
@@ -134,5 +136,5 @@ licença original estão em `src\assets\cursors`.
 ## Fontes das ferramentas
 
 - yt-dlp: `https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe`
-- FFmpeg para Windows: `https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip`
+- FFmpeg para Windows: `https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.7z`
 - FFmpeg Git para Windows: `https://www.gyan.dev/ffmpeg/builds/ffmpeg-git-essentials.7z`

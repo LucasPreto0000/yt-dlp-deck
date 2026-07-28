@@ -169,6 +169,7 @@ const isAudio = (format: FormatId | null) =>
 
 type ToastTone = "info" | "success" | "error";
 type ToolId = "yt-dlp" | "ffmpeg";
+const TOOL_UPDATE_CACHE_MS = 60_000;
 
 interface ToastItem {
   id: number;
@@ -335,7 +336,7 @@ function ToolBadge({
       aria-label={`${label} ${ready ? "instalado" : "não encontrado"}. ${action}`}
       aria-busy={checking}
       aria-disabled={!ready || disabled}
-      disabled={!ready}
+      disabled={!ready || disabled}
       onClick={() => {
         if (!checking && !disabled) onUpdate(tool);
       }}
@@ -648,8 +649,10 @@ function App() {
   const [wifiOnly, setWifiOnly] = useState(false);
   const [tools, setTools] = useState<ToolStatus | null>(null);
   const [checkingTools, setCheckingTools] = useState(true);
-  const [updatingTool, setUpdatingTool] = useState<ToolId | null>(null);
-  const [recentlyUpdatedTool, setRecentlyUpdatedTool] = useState<ToolId | null>(null);
+  const [updatingTools, setUpdatingTools] = useState<ReadonlySet<ToolId>>(() => new Set());
+  const [recentlyUpdatedTools, setRecentlyUpdatedTools] = useState<ReadonlySet<ToolId>>(
+    () => new Set(),
+  );
   const [downloading, setDownloading] = useState(false);
   const [downloadPercent, setDownloadPercent] = useState(0);
   const [downloadLines, setDownloadLines] = useState<string[]>([]);
@@ -676,11 +679,17 @@ function App() {
   const downloadPercentRef = useRef(0);
   const downloadFlushRef = useRef<number | null>(null);
   const searchRequestRef = useRef(0);
+  const searchInFlightRef = useRef(false);
+  const downloadInFlightRef = useRef(false);
   const previewTriggerRef = useRef<HTMLButtonElement | null>(null);
   const gpuCanvasRef = useRef<HTMLCanvasElement>(null);
   const gpuControllerRef = useRef<BackdropController | null>(null);
   const toastIdRef = useRef(0);
   const toastTimersRef = useRef<number[]>([]);
+  const updateInFlightRef = useRef<Set<ToolId>>(new Set());
+  const toolUpdateCacheRef = useRef(
+    new Map<ToolId, { checkedAt: number; result: ToolUpdateResult }>(),
+  );
   const [gpuRenderer, setGpuRenderer] = useState("GPU iniciando");
 
   const pushToast = useCallback((tone: ToastTone, title: string, message: string) => {
@@ -910,6 +919,7 @@ function App() {
   }, [step]);
 
   async function checkTools(announce = false) {
+    if (announce) toolUpdateCacheRef.current.clear();
     setCheckingTools(true);
     try {
       const status = await appInvoke<ToolStatus>("get_tool_status");
@@ -944,23 +954,47 @@ function App() {
       );
       return;
     }
-    if (downloading || (tool === "yt-dlp" && searching)) {
+    if (updateInFlightRef.current.has(tool)) {
+      pushToast(
+        "info",
+        `${label} já está sendo verificado`,
+        "A consulta atual continua em andamento.",
+      );
+      return;
+    }
+
+    const cached = toolUpdateCacheRef.current.get(tool);
+    if (cached && performance.now() - cached.checkedAt < TOOL_UPDATE_CACHE_MS) {
+      pushToast(
+        "info",
+        `${label} verificado recentemente`,
+        cached.result.message,
+      );
+      return;
+    }
+    const downloadBusy = downloadInFlightRef.current || downloading;
+    if (downloadBusy || (tool === "yt-dlp" && (searchInFlightRef.current || searching))) {
       pushToast(
         "info",
         "Atualização aguardando",
-        downloading
+        downloadBusy
           ? `Finalize o download atual antes de atualizar o ${label}.`
           : "Finalize a pesquisa atual antes de atualizar o yt-dlp.",
       );
       return;
     }
-    if (updatingTool) return;
 
-    setUpdatingTool(tool);
-    setRecentlyUpdatedTool(null);
+    updateInFlightRef.current.add(tool);
+    setUpdatingTools((current) => new Set(current).add(tool));
+    setRecentlyUpdatedTools((current) => {
+      const next = new Set(current);
+      next.delete(tool);
+      return next;
+    });
     try {
       const command = tool === "yt-dlp" ? "update_yt_dlp" : "update_ffmpeg";
       const result = await appInvoke<ToolUpdateResult>(command);
+      toolUpdateCacheRef.current.set(tool, { checkedAt: performance.now(), result });
       setTools((current) => {
         if (!current) return current;
         return tool === "yt-dlp"
@@ -976,9 +1010,13 @@ function App() {
             };
       });
       if (result.updated) {
-        setRecentlyUpdatedTool(tool);
+        setRecentlyUpdatedTools((current) => new Set(current).add(tool));
         const timer = window.setTimeout(() => {
-          setRecentlyUpdatedTool((current) => current === tool ? null : current);
+          setRecentlyUpdatedTools((current) => {
+            const next = new Set(current);
+            next.delete(tool);
+            return next;
+          });
         }, 1_800);
         toastTimersRef.current.push(timer);
       }
@@ -994,7 +1032,12 @@ function App() {
     } catch (error) {
       pushToast("error", `Falha ao atualizar ${label}`, errorText(error));
     } finally {
-      setUpdatingTool(null);
+      updateInFlightRef.current.delete(tool);
+      setUpdatingTools((current) => {
+        const next = new Set(current);
+        next.delete(tool);
+        return next;
+      });
     }
   }
 
@@ -1181,8 +1224,8 @@ function App() {
   }
 
   async function searchVideos() {
-    if (!searchAvailable || !searchQuery.trim()) return;
-    if (updatingTool === "yt-dlp") {
+    if (!searchAvailable || !searchQuery.trim() || searchInFlightRef.current) return;
+    if (updateInFlightRef.current.has("yt-dlp") || updatingTools.has("yt-dlp")) {
       pushToast(
         "info",
         "yt-dlp em atualização",
@@ -1191,6 +1234,7 @@ function App() {
       return;
     }
     const requestId = ++searchRequestRef.current;
+    searchInFlightRef.current = true;
     setSearching(true);
     setSearchError("");
     setResults([]);
@@ -1204,6 +1248,7 @@ function App() {
       if (requestId !== searchRequestRef.current) return;
       setSearchError(errorText(error));
     } finally {
+      searchInFlightRef.current = false;
       if (requestId === searchRequestRef.current) setSearching(false);
     }
   }
@@ -1232,8 +1277,8 @@ function App() {
   }
 
   async function startDownload() {
-    if (!format || downloading) return;
-    if (updatingTool) {
+    if (!format || downloading || downloadInFlightRef.current) return;
+    if (updateInFlightRef.current.size > 0 || updatingTools.size > 0) {
       pushToast(
         "info",
         "Ferramenta em atualização",
@@ -1241,6 +1286,7 @@ function App() {
       );
       return;
     }
+    downloadInFlightRef.current = true;
     const startedAt = Date.now();
     const desktopJobId = globalThis.crypto?.randomUUID?.() || `download-${startedAt}`;
     if (isAndroidRuntime) {
@@ -1254,6 +1300,7 @@ function App() {
       } catch (error) {
         setDownloadError(errorText(error));
         setMobileActionBusy(false);
+        downloadInFlightRef.current = false;
         return;
       }
       setMobileActionBusy(false);
@@ -1317,6 +1364,7 @@ function App() {
       }
       pushToast("error", "O download falhou", message);
     } finally {
+      downloadInFlightRef.current = false;
       setDownloading(false);
     }
   }
@@ -1570,7 +1618,7 @@ function App() {
                   <button
                     className="primary-button"
                     onClick={searchVideos}
-                    disabled={!searchQuery.trim() || searching || updatingTool === "yt-dlp"}
+                    disabled={!searchQuery.trim() || searching || updatingTools.has("yt-dlp")}
                   >
                     {searching ? <LoaderCircle className="spin" size={18} /> : <Search size={18} />}
                     {searching ? "Buscando" : "Buscar"}
@@ -1951,7 +1999,7 @@ function App() {
             <button
               className="download-button"
               onClick={startDownload}
-              disabled={downloading || updatingTool !== null}
+              disabled={downloading || updatingTools.size > 0}
             >
               <span className="button-shine" />
               {downloading ? <LoaderCircle className="spin" /> : <Download />}
@@ -2314,9 +2362,9 @@ function App() {
             label="yt-dlp"
             ready={Boolean(tools?.ytDlp)}
             version={tools?.ytDlpVersion}
-            checking={checkingTools || updatingTool === "yt-dlp"}
-            recentlyUpdated={recentlyUpdatedTool === "yt-dlp"}
-            disabled={checkingTools || updatingTool !== null}
+            checking={checkingTools || updatingTools.has("yt-dlp")}
+            recentlyUpdated={recentlyUpdatedTools.has("yt-dlp")}
+            disabled={checkingTools || updatingTools.has("yt-dlp")}
             onUpdate={updateTool}
           />
           <ToolBadge
@@ -2324,11 +2372,21 @@ function App() {
             label="FFmpeg"
             ready={Boolean(tools?.ffmpeg)}
             version={tools?.ffmpegVersion}
-            checking={checkingTools || updatingTool === "ffmpeg"}
-            recentlyUpdated={recentlyUpdatedTool === "ffmpeg"}
-            disabled={checkingTools || updatingTool !== null}
+            checking={checkingTools || updatingTools.has("ffmpeg")}
+            recentlyUpdated={recentlyUpdatedTools.has("ffmpeg")}
+            disabled={checkingTools || updatingTools.has("ffmpeg")}
             onUpdate={updateTool}
           />
+          <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+            {checkingTools
+              ? "Verificando se o yt-dlp e o FFmpeg estão instalados."
+              : updatingTools.size > 0
+                ? `Procurando atualizações de ${[
+                    updatingTools.has("yt-dlp") ? "yt-dlp" : "",
+                    updatingTools.has("ffmpeg") ? "FFmpeg" : "",
+                  ].filter(Boolean).join(" e ")}.`
+                : ""}
+          </span>
         </div>
       </header>
 

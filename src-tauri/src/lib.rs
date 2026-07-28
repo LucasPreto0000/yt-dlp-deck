@@ -5,11 +5,14 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     fs::File,
-    io::{self, Read, Write},
+    io::{Read, Write},
     path::{Path, PathBuf},
     process::Stdio,
-    sync::{Mutex, OnceLock},
-    time::{Duration, Instant},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex, OnceLock,
+    },
+    time::{Duration, Instant, SystemTime},
 };
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::{
@@ -20,19 +23,27 @@ use tokio::{
 };
 
 const YTDLP_URL: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
-const FFMPEG_URL: &str = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip";
-const FFMPEG_VERSION_URL: &str =
-    "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip.ver";
+const YTDLP_LATEST_URL: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest";
+const FFMPEG_URL: &str = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.7z";
+const FFMPEG_VERSION_URL: &str = "https://www.gyan.dev/ffmpeg/builds/release-version";
 const FFMPEG_CHECKSUM_URL: &str =
-    "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip.sha256";
+    "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.7z.sha256";
 const FFMPEG_GIT_URL: &str = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-git-essentials.7z";
-const FFMPEG_GIT_VERSION_URL: &str =
-    "https://www.gyan.dev/ffmpeg/builds/ffmpeg-git-essentials.7z.ver";
+const FFMPEG_GIT_VERSION_URL: &str = "https://www.gyan.dev/ffmpeg/builds/git-version";
 const FFMPEG_GIT_CHECKSUM_URL: &str =
     "https://www.gyan.dev/ffmpeg/builds/ffmpeg-git-essentials.7z.sha256";
 const MAX_TOOL_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
 const FFMPEG_TRANSACTION_FILE: &str = "ffmpeg-update.transaction";
-static TOOL_OPERATION_LOCK: OnceLock<RwLock<()>> = OnceLock::new();
+const REMOTE_CACHE_TTL: Duration = Duration::from_secs(90);
+static HTTP_CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
+static HTTP_NO_REDIRECT_CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
+static REMOTE_VALUE_CACHE: OnceLock<Mutex<HashMap<String, (Instant, String)>>> = OnceLock::new();
+static LOCAL_VERSION_CACHE: OnceLock<Mutex<HashMap<String, LocalVersionCacheEntry>>> =
+    OnceLock::new();
+static YTDLP_OPERATION_LOCK: OnceLock<RwLock<()>> = OnceLock::new();
+static FFMPEG_OPERATION_LOCK: OnceLock<RwLock<()>> = OnceLock::new();
+static YTDLP_UPDATE_BUSY: AtomicBool = AtomicBool::new(false);
+static FFMPEG_UPDATE_BUSY: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,10 +86,38 @@ struct FfmpegUpdateSource {
     checksum_url: &'static str,
     archive_extension: &'static str,
     git_build: bool,
+    seven_zip: bool,
 }
 
-fn tool_operation_lock() -> &'static RwLock<()> {
-    TOOL_OPERATION_LOCK.get_or_init(|| RwLock::new(()))
+#[derive(Clone)]
+struct LocalVersionCacheEntry {
+    size: u64,
+    modified: Option<SystemTime>,
+    version: String,
+}
+
+struct ToolUpdateGuard(&'static AtomicBool);
+
+impl ToolUpdateGuard {
+    fn acquire(flag: &'static AtomicBool, tool: &str) -> Result<Self, String> {
+        flag.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map(|_| Self(flag))
+            .map_err(|_| format!("O {tool} já está procurando atualizações."))
+    }
+}
+
+impl Drop for ToolUpdateGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+fn yt_dlp_operation_lock() -> &'static RwLock<()> {
+    YTDLP_OPERATION_LOCK.get_or_init(|| RwLock::new(()))
+}
+
+fn ffmpeg_operation_lock() -> &'static RwLock<()> {
+    FFMPEG_OPERATION_LOCK.get_or_init(|| RwLock::new(()))
 }
 
 #[derive(Clone, Serialize)]
@@ -193,6 +232,96 @@ async fn copy_local_tool_if_available(destination: &Path, file_name: &str) -> bo
     false
 }
 
+fn http_client() -> Result<&'static reqwest::Client, String> {
+    match HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(3))
+            .pool_idle_timeout(Duration::from_secs(120))
+            .tcp_keepalive(Duration::from_secs(30))
+            .build()
+            .map_err(|error| format!("Falha ao preparar a conexão de atualização: {error}"))
+    }) {
+        Ok(client) => Ok(client),
+        Err(error) => Err(error.clone()),
+    }
+}
+
+fn http_no_redirect_client() -> Result<&'static reqwest::Client, String> {
+    match HTTP_NO_REDIRECT_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(3))
+            .pool_idle_timeout(Duration::from_secs(120))
+            .tcp_keepalive(Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|error| format!("Falha ao preparar a consulta de atualização: {error}"))
+    }) {
+        Ok(client) => Ok(client),
+        Err(error) => Err(error.clone()),
+    }
+}
+
+fn cached_remote_value(key: &str) -> Option<String> {
+    let cache = REMOTE_VALUE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let Ok(mut entries) = cache.lock() else {
+        return None;
+    };
+    entries.retain(|_, (created, _)| created.elapsed() < REMOTE_CACHE_TTL);
+    entries.get(key).map(|(_, value)| value.clone())
+}
+
+fn store_remote_value(key: &str, value: &str) {
+    let cache = REMOTE_VALUE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut entries) = cache.lock() {
+        entries.insert(key.to_owned(), (Instant::now(), value.to_owned()));
+    }
+}
+
+fn invalidate_remote_value(key: &str) {
+    let cache = REMOTE_VALUE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut entries) = cache.lock() {
+        entries.remove(key);
+    }
+}
+
+fn file_fingerprint(path: &Path) -> Result<(u64, Option<SystemTime>), String> {
+    let metadata = std::fs::metadata(path)
+        .map_err(|error| format!("Não foi possível examinar {}: {error}", path.display()))?;
+    Ok((metadata.len(), metadata.modified().ok()))
+}
+
+fn cached_local_version(path: &Path) -> Option<String> {
+    let (size, modified) = file_fingerprint(path).ok()?;
+    let cache = LOCAL_VERSION_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let entries = cache.lock().ok()?;
+    let entry = entries.get(&path.to_string_lossy().to_string())?;
+    (entry.size == size && entry.modified == modified).then(|| entry.version.clone())
+}
+
+fn store_local_version(path: &Path, version: &str) {
+    let Ok((size, modified)) = file_fingerprint(path) else {
+        return;
+    };
+    let cache = LOCAL_VERSION_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut entries) = cache.lock() {
+        entries.insert(
+            path.to_string_lossy().into_owned(),
+            LocalVersionCacheEntry {
+                size,
+                modified,
+                version: version.to_owned(),
+            },
+        );
+    }
+}
+
+fn invalidate_local_version(path: &Path) {
+    let cache = LOCAL_VERSION_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut entries) = cache.lock() {
+        entries.remove(&path.to_string_lossy().to_string());
+    }
+}
+
 async fn download_file(
     app: &AppHandle,
     tool: &str,
@@ -201,16 +330,11 @@ async fn download_file(
     emit_progress: bool,
 ) -> Result<(), String> {
     let temporary = destination.with_extension("download");
-    let request = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(15))
-        .build()
-        .map_err(|e| format!("Falha ao preparar o download de {tool}: {e}"))?
-        .get(url)
-        .header(
-            "User-Agent",
-            format!("YT-DLP-Deck/{}", env!("CARGO_PKG_VERSION")),
-        );
-    let response = tokio::time::timeout(Duration::from_secs(45), request.send())
+    let request = http_client()?.get(url).header(
+        "User-Agent",
+        format!("YT-DLP-Deck/{}", env!("CARGO_PKG_VERSION")),
+    );
+    let response = tokio::time::timeout(Duration::from_secs(30), request.send())
         .await
         .map_err(|_| format!("O servidor de {tool} demorou mais que o esperado."))?
         .map_err(|e| format!("Falha ao conectar para baixar {tool}: {e}"))?
@@ -230,7 +354,7 @@ async fn download_file(
     let mut last_percent = 255_u8;
 
     loop {
-        let next_chunk = tokio::time::timeout(Duration::from_secs(90), stream.next())
+        let next_chunk = tokio::time::timeout(Duration::from_secs(60), stream.next())
             .await
             .map_err(|_| format!("O download de {tool} ficou sem responder por muito tempo."))?;
         let Some(chunk) = next_chunk else {
@@ -277,34 +401,127 @@ async fn download_file(
 }
 
 async fn fetch_small_text(url: &str, label: &str) -> Result<String, String> {
-    let response = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(45))
-        .build()
-        .map_err(|e| format!("Falha ao preparar a consulta de {label}: {e}"))?
-        .get(url)
-        .header(
-            "User-Agent",
-            format!("YT-DLP-Deck/{}", env!("CARGO_PKG_VERSION")),
-        )
-        .send()
+    let client = http_client()?;
+    let mut last_error = format!("Falha ao consultar {label}.");
+    for attempt in 0..2 {
+        let result = tokio::time::timeout(Duration::from_secs(4), async {
+            let response = client
+                .get(url)
+                .header(
+                    "User-Agent",
+                    format!("YT-DLP-Deck/{}", env!("CARGO_PKG_VERSION")),
+                )
+                .send()
+                .await
+                .map_err(|error| format!("Falha ao consultar {label}: {error}"))?
+                .error_for_status()
+                .map_err(|error| format!("O servidor recusou a consulta de {label}: {error}"))?;
+            if response.content_length().is_some_and(|size| size > 4096) {
+                return Err(format!("A resposta de {label} é maior que o esperado."));
+            }
+            let bytes = response
+                .bytes()
+                .await
+                .map_err(|error| format!("Falha ao ler a resposta de {label}: {error}"))?;
+            if bytes.len() > 4096 {
+                return Err(format!("A resposta de {label} é maior que o esperado."));
+            }
+            let value = String::from_utf8_lossy(&bytes).trim().to_owned();
+            if value.is_empty() {
+                Err(format!("O servidor não informou {label}."))
+            } else {
+                Ok(value)
+            }
+        })
         .await
-        .map_err(|e| format!("Falha ao consultar {label}: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("O servidor recusou a consulta de {label}: {e}"))?;
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| format!("Falha ao ler a resposta de {label}: {e}"))?;
-    if bytes.len() > 4096 {
-        return Err(format!("A resposta de {label} é maior que o esperado."));
+        .unwrap_or_else(|_| {
+            Err(format!(
+                "A consulta de {label} demorou mais que o esperado."
+            ))
+        });
+
+        match result {
+            Ok(value) => return Ok(value),
+            Err(error) => last_error = error,
+        }
+        if attempt == 0 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
-    let value = String::from_utf8_lossy(&bytes).trim().to_owned();
-    if value.is_empty() {
-        Err(format!("O servidor não informou {label}."))
-    } else {
-        Ok(value)
+    Err(last_error)
+}
+
+async fn fetch_cached_small_text(
+    cache_key: &str,
+    url: &str,
+    label: &str,
+) -> Result<String, String> {
+    if let Some(value) = cached_remote_value(cache_key) {
+        return Ok(value);
     }
+    let value = fetch_small_text(url, label).await?;
+    store_remote_value(cache_key, &value);
+    Ok(value)
+}
+
+fn valid_yt_dlp_version(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|character| character.is_ascii_digit() || character == '.' || character == '-')
+        && value
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_digit())
+        && value
+            .chars()
+            .next_back()
+            .is_some_and(|character| character.is_ascii_digit())
+}
+
+async fn fetch_latest_yt_dlp_version() -> Result<String, String> {
+    const CACHE_KEY: &str = "yt-dlp:stable:latest";
+    if let Some(value) = cached_remote_value(CACHE_KEY) {
+        return Ok(value);
+    }
+
+    let client = http_no_redirect_client()?;
+    let version = tokio::time::timeout(Duration::from_secs(3), async {
+        let response = client
+            .head(YTDLP_LATEST_URL)
+            .header(
+                "User-Agent",
+                format!("YT-DLP-Deck/{}", env!("CARGO_PKG_VERSION")),
+            )
+            .send()
+            .await
+            .map_err(|error| format!("Falha ao consultar o yt-dlp: {error}"))?;
+        if !response.status().is_redirection() {
+            return Err(format!(
+                "O servidor do yt-dlp respondeu com o estado {}.",
+                response.status()
+            ));
+        }
+        let location = response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .ok_or_else(|| "O servidor do yt-dlp não informou a versão atual.".to_owned())?;
+        let version = location
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or_default()
+            .trim();
+        if !valid_yt_dlp_version(version) {
+            return Err("O servidor informou uma versão inválida do yt-dlp.".to_owned());
+        }
+        Ok(version.to_owned())
+    })
+    .await
+    .unwrap_or_else(|_| Err("A consulta do yt-dlp demorou mais que o esperado.".to_owned()))?;
+    store_remote_value(CACHE_KEY, &version);
+    Ok(version)
 }
 
 fn sha256_file(path: &Path) -> Result<String, String> {
@@ -371,6 +588,38 @@ async fn yt_dlp_version(path: &Path) -> Result<String, String> {
         })
 }
 
+async fn yt_dlp_version_cached(path: &Path) -> Result<String, String> {
+    if let Some(version) = cached_local_version(path) {
+        return Ok(version);
+    }
+    let version = yt_dlp_version(path).await?;
+    store_local_version(path, &version);
+    Ok(version)
+}
+
+fn parse_yt_dlp_update_version(output: &str) -> Option<String> {
+    ["stable@", "nightly@", "master@"]
+        .iter()
+        .flat_map(|channel| {
+            output.match_indices(channel).filter_map(move |(index, _)| {
+                let value = output[index + channel.len()..]
+                    .split(|character: char| {
+                        character.is_whitespace()
+                            || matches!(character, ')' | ']' | ',' | ';' | '"' | '\'')
+                    })
+                    .next()
+                    .unwrap_or_default()
+                    .trim_matches(|character: char| {
+                        !character.is_ascii_alphanumeric() && character != '.' && character != '-'
+                    })
+                    .trim_end_matches(['.', '-']);
+                valid_yt_dlp_version(value).then(|| (index, value.to_owned()))
+            })
+        })
+        .max_by_key(|(index, _)| *index)
+        .map(|(_, version)| version)
+}
+
 fn parse_media_tool_version(output: &str, tool: &str) -> Option<String> {
     let prefix = format!("{tool} version ");
     output.lines().find_map(|line| {
@@ -392,6 +641,15 @@ async fn ffmpeg_version(path: &Path) -> Result<String, String> {
             parse_ffmpeg_version(&output)
                 .ok_or_else(|| "O FFmpeg não informou a versão instalada.".to_owned())
         })
+}
+
+async fn ffmpeg_version_cached(path: &Path) -> Result<String, String> {
+    if let Some(version) = cached_local_version(path) {
+        return Ok(version);
+    }
+    let version = ffmpeg_version(path).await?;
+    store_local_version(path, &version);
+    Ok(version)
 }
 
 async fn ffprobe_version(path: &Path) -> Result<String, String> {
@@ -466,6 +724,7 @@ fn ffmpeg_update_source(version: &str) -> Option<FfmpegUpdateSource> {
             checksum_url: FFMPEG_GIT_CHECKSUM_URL,
             archive_extension: "7z",
             git_build: true,
+            seven_zip: true,
         })
     } else if is_ffmpeg_git_build(version) {
         None
@@ -474,8 +733,9 @@ fn ffmpeg_update_source(version: &str) -> Option<FfmpegUpdateSource> {
             archive_url: FFMPEG_URL,
             version_url: FFMPEG_VERSION_URL,
             checksum_url: FFMPEG_CHECKSUM_URL,
-            archive_extension: "zip",
+            archive_extension: "7z",
             git_build: false,
+            seven_zip: true,
         })
     }
 }
@@ -629,42 +889,6 @@ fn commit_ffmpeg_install(output_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn extract_ffmpeg_archive(archive_path: &Path, output_dir: &Path) -> Result<(), String> {
-    let file =
-        File::open(archive_path).map_err(|e| format!("Falha ao abrir o pacote do FFmpeg: {e}"))?;
-    let mut archive =
-        zip::ZipArchive::new(file).map_err(|e| format!("Pacote do FFmpeg inválido: {e}"))?;
-    let wanted = ["ffmpeg.exe", "ffprobe.exe"];
-    let mut extracted = 0;
-
-    for index in 0..archive.len() {
-        let mut entry = archive
-            .by_index(index)
-            .map_err(|e| format!("Falha ao ler o pacote do FFmpeg: {e}"))?;
-        let normalized = entry.name().replace('\\', "/");
-        let Some(file_name) = wanted
-            .iter()
-            .find(|name| normalized.ends_with(&format!("/bin/{name}")))
-        else {
-            continue;
-        };
-        let output = output_dir.join(file_name);
-        let mut target =
-            File::create(&output).map_err(|e| format!("Falha ao criar {file_name}: {e}"))?;
-        io::copy(&mut entry, &mut target)
-            .map_err(|e| format!("Falha ao extrair {file_name}: {e}"))?;
-        target
-            .flush()
-            .map_err(|e| format!("Falha ao finalizar {file_name}: {e}"))?;
-        extracted += 1;
-    }
-
-    if extracted != wanted.len() {
-        return Err("O pacote baixado não continha ffmpeg.exe e ffprobe.exe.".to_owned());
-    }
-    Ok(())
-}
-
 fn find_extracted_tool(directory: &Path, file_name: &str) -> Option<PathBuf> {
     let mut pending = vec![directory.to_path_buf()];
     while let Some(current) = pending.pop() {
@@ -719,13 +943,13 @@ async fn ensure_tools_internal(app: &AppHandle) -> Result<ToolStatus, String> {
     if !ffmpeg.is_file() {
         emit_setup(app, "ffmpeg", "Preparando FFmpeg…", Some(0));
         if !copy_local_tool_if_available(&ffmpeg, "ffmpeg.exe").await {
-            let archive = directory.join("ffmpeg.zip");
+            let archive = directory.join("ffmpeg.7z");
             download_file(app, "ffmpeg", FFMPEG_URL, &archive, true).await?;
             emit_setup(app, "ffmpeg", "Extraindo FFmpeg…", None);
             let archive_for_task = archive.clone();
             let directory_for_task = directory.clone();
             tokio::task::spawn_blocking(move || {
-                extract_ffmpeg_archive(&archive_for_task, &directory_for_task)
+                extract_ffmpeg_7z_archive(&archive_for_task, &directory_for_task)
             })
             .await
             .map_err(|e| format!("Falha interna ao extrair FFmpeg: {e}"))??;
@@ -759,7 +983,10 @@ async fn get_tool_status_internal(app: &AppHandle) -> Result<ToolStatus, String>
 
 #[tauri::command]
 async fn ensure_tools(app: AppHandle) -> Result<ToolStatus, String> {
-    let _operation = tool_operation_lock().try_write().map_err(|_| {
+    let _yt_dlp_operation = yt_dlp_operation_lock().try_write().map_err(|_| {
+        "As ferramentas estão sendo usadas. Tente novamente em instantes.".to_owned()
+    })?;
+    let _ffmpeg_operation = ffmpeg_operation_lock().try_write().map_err(|_| {
         "As ferramentas estão sendo usadas. Tente novamente em instantes.".to_owned()
     })?;
     ensure_tools_internal(&app).await
@@ -767,26 +994,61 @@ async fn ensure_tools(app: AppHandle) -> Result<ToolStatus, String> {
 
 #[tauri::command]
 async fn get_tool_status(app: AppHandle) -> Result<ToolStatus, String> {
-    let _operation = tool_operation_lock().read().await;
+    let _yt_dlp_operation = yt_dlp_operation_lock().read().await;
+    let _ffmpeg_operation = ffmpeg_operation_lock().read().await;
     get_tool_status_internal(&app).await
 }
 
 #[tauri::command]
 async fn update_yt_dlp(app: AppHandle) -> Result<ToolUpdateResult, String> {
-    let _operation = tool_operation_lock().try_write().map_err(|_| {
-        "Aguarde a pesquisa, o download ou a outra atualização terminar.".to_owned()
-    })?;
+    let _update_guard = ToolUpdateGuard::acquire(&YTDLP_UPDATE_BUSY, "yt-dlp")?;
     let executable = require_tool(&app, "yt-dlp.exe")?;
-    let previous_version = yt_dlp_version(&executable).await?;
-    command_output(
+    let (previous_version, latest_stable) = futures_util::future::join(
+        yt_dlp_version_cached(&executable),
+        fetch_latest_yt_dlp_version(),
+    )
+    .await;
+    let previous_version = previous_version?;
+
+    if latest_stable
+        .as_ref()
+        .is_ok_and(|remote| remote == &previous_version)
+    {
+        return Ok(ToolUpdateResult {
+            tool: "yt-dlp".to_owned(),
+            status: "current".to_owned(),
+            updated: false,
+            previous_version: Some(previous_version.clone()),
+            current_version: Some(previous_version.clone()),
+            message: format!("yt-dlp já está na versão mais recente ({previous_version})."),
+        });
+    }
+
+    let _operation = yt_dlp_operation_lock()
+        .try_write()
+        .map_err(|_| "Aguarde a pesquisa ou o download do yt-dlp terminar.".to_owned())?;
+    let update_output = command_output(
         &executable,
-        &["--no-config", "--encoding", "utf-8", "-U"],
+        &[
+            "--no-config",
+            "--encoding",
+            "utf-8",
+            "--socket-timeout",
+            "10",
+            "-U",
+        ],
         180,
     )
     .await
     .map_err(|error| format!("Não foi possível atualizar o yt-dlp: {error}"))?;
-    tokio::time::sleep(Duration::from_millis(350)).await;
-    let current_version = yt_dlp_version(&executable).await?;
+    let current_version = match parse_yt_dlp_update_version(&update_output) {
+        Some(version) => version,
+        None => {
+            invalidate_local_version(&executable);
+            yt_dlp_version(&executable).await?
+        }
+    };
+    store_local_version(&executable, &current_version);
     let updated = previous_version != current_version;
     let message = if updated {
         format!("yt-dlp atualizado de {previous_version} para {current_version}.")
@@ -805,13 +1067,21 @@ async fn update_yt_dlp(app: AppHandle) -> Result<ToolUpdateResult, String> {
 
 #[tauri::command]
 async fn update_ffmpeg(app: AppHandle) -> Result<ToolUpdateResult, String> {
-    let _operation = tool_operation_lock().try_write().map_err(|_| {
-        "Aguarde a pesquisa, o download ou a outra atualização terminar.".to_owned()
-    })?;
+    let _update_guard = ToolUpdateGuard::acquire(&FFMPEG_UPDATE_BUSY, "FFmpeg")?;
     let directory = app_tools_dir(&app)?;
-    recover_ffmpeg_transaction(&directory)?;
+    {
+        let _recovery_operation = ffmpeg_operation_lock()
+            .try_write()
+            .map_err(|_| "Aguarde o download que está usando o FFmpeg terminar.".to_owned())?;
+        let transaction_pending = directory.join(FFMPEG_TRANSACTION_FILE).is_file();
+        recover_ffmpeg_transaction(&directory)?;
+        if transaction_pending {
+            invalidate_local_version(&directory.join("ffmpeg.exe"));
+            invalidate_local_version(&directory.join("ffprobe.exe"));
+        }
+    }
     let executable = require_tool(&app, "ffmpeg.exe")?;
-    let previous_version = ffmpeg_version(&executable).await?;
+    let previous_version = ffmpeg_version_cached(&executable).await?;
     let Some(source) = ffmpeg_update_source(&previous_version) else {
         return Ok(ToolUpdateResult {
             tool: "ffmpeg".to_owned(),
@@ -822,13 +1092,17 @@ async fn update_ffmpeg(app: AppHandle) -> Result<ToolUpdateResult, String> {
             message: "Este build de desenvolvimento do FFmpeg não informa uma data comparável e foi preservado para evitar downgrade.".to_owned(),
         });
     };
-    let remote_version = fetch_small_text(source.version_url, "a versão mais recente do FFmpeg")
-        .await?
-        .lines()
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .to_owned();
+    let remote_version = fetch_cached_small_text(
+        source.version_url,
+        source.version_url,
+        "a versão mais recente do FFmpeg",
+    )
+    .await?
+    .lines()
+    .next()
+    .unwrap_or_default()
+    .trim()
+    .to_owned();
     let valid_remote_version = if source.git_build {
         git_build_date(&remote_version).is_some()
             && remote_version
@@ -841,6 +1115,7 @@ async fn update_ffmpeg(app: AppHandle) -> Result<ToolUpdateResult, String> {
                 .all(|character| character.is_ascii_digit() || character == '.')
     };
     if !valid_remote_version {
+        invalidate_remote_value(source.version_url);
         return Err("O servidor informou uma versão inválida do FFmpeg.".to_owned());
     }
 
@@ -873,6 +1148,9 @@ async fn update_ffmpeg(app: AppHandle) -> Result<ToolUpdateResult, String> {
         });
     }
 
+    let _update_operation = ffmpeg_operation_lock()
+        .try_write()
+        .map_err(|_| "Aguarde o download que está usando o FFmpeg terminar.".to_owned())?;
     let archive = directory.join(format!("ffmpeg-update.{}", source.archive_extension));
     let staging_dir = directory.join("ffmpeg-update-staging");
     let _ = fs::remove_file(&archive).await;
@@ -883,28 +1161,42 @@ async fn update_ffmpeg(app: AppHandle) -> Result<ToolUpdateResult, String> {
         .map_err(|e| format!("Falha ao preparar a atualização do FFmpeg: {e}"))?;
 
     let update_result = async {
-        let expected_checksum =
-            fetch_small_text(source.checksum_url, "a assinatura do FFmpeg").await?;
-        let expected_checksum = expected_checksum
-            .split_whitespace()
-            .next()
-            .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase();
-        if expected_checksum.len() != 64
-            || !expected_checksum
-                .chars()
-                .all(|character| character.is_ascii_hexdigit())
-        {
-            return Err("O servidor informou uma assinatura inválida do FFmpeg.".to_owned());
-        }
+        let checksum_cache_key = format!("{}:{remote_version}", source.checksum_url);
+        let checksum_request = async {
+            let expected_checksum = fetch_cached_small_text(
+                &checksum_cache_key,
+                source.checksum_url,
+                "a assinatura do FFmpeg",
+            )
+            .await?;
+            let expected_checksum = expected_checksum
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_lowercase();
+            if expected_checksum.len() != 64
+                || !expected_checksum
+                    .chars()
+                    .all(|character| character.is_ascii_hexdigit())
+            {
+                invalidate_remote_value(&checksum_cache_key);
+                return Err("O servidor informou uma assinatura inválida do FFmpeg.".to_owned());
+            }
+            Ok(expected_checksum)
+        };
+        let (expected_checksum, _) = futures_util::future::try_join(
+            checksum_request,
+            download_file(&app, "FFmpeg", source.archive_url, &archive, false),
+        )
+        .await?;
 
-        download_file(&app, "FFmpeg", source.archive_url, &archive, false).await?;
         let archive_for_hash = archive.clone();
         let actual_checksum = tokio::task::spawn_blocking(move || sha256_file(&archive_for_hash))
             .await
             .map_err(|e| format!("Falha interna ao validar o FFmpeg: {e}"))??;
         if actual_checksum != expected_checksum {
+            invalidate_remote_value(&checksum_cache_key);
             return Err(
                 "A validação SHA-256 do FFmpeg falhou. O arquivo atual foi preservado.".to_owned(),
             );
@@ -912,25 +1204,34 @@ async fn update_ffmpeg(app: AppHandle) -> Result<ToolUpdateResult, String> {
 
         let archive_for_task = archive.clone();
         let staging_for_task = staging_dir.clone();
-        let git_build = source.git_build;
+        let seven_zip = source.seven_zip;
         tokio::task::spawn_blocking(move || {
-            if git_build {
+            if seven_zip {
                 extract_ffmpeg_7z_archive(&archive_for_task, &staging_for_task)
             } else {
-                extract_ffmpeg_archive(&archive_for_task, &staging_for_task)
+                Err("O formato do pacote de FFmpeg não é compatível.".to_owned())
             }
         })
         .await
         .map_err(|e| format!("Falha interna ao extrair o FFmpeg: {e}"))??;
 
-        let staged_version = ffmpeg_version(&staging_dir.join("ffmpeg.exe")).await?;
-        let staged_probe_version = ffprobe_version(&staging_dir.join("ffprobe.exe")).await?;
+        let (staged_version, staged_probe_version) = futures_util::future::join(
+            ffmpeg_version(&staging_dir.join("ffmpeg.exe")),
+            ffprobe_version(&staging_dir.join("ffprobe.exe")),
+        )
+        .await;
+        let staged_version = staged_version?;
+        let staged_probe_version = staged_probe_version?;
         if !ffmpeg_release_matches(&staged_version, &remote_version) {
+            invalidate_remote_value(source.version_url);
+            invalidate_remote_value(&checksum_cache_key);
             return Err(format!(
                 "O pacote do FFmpeg informou a versão {staged_version}, diferente da esperada ({remote_version})."
             ));
         }
         if !ffmpeg_release_matches(&staged_probe_version, &remote_version) {
+            invalidate_remote_value(source.version_url);
+            invalidate_remote_value(&checksum_cache_key);
             return Err(format!(
                 "O pacote do FFprobe informou a versão {staged_probe_version}, diferente da esperada ({remote_version})."
             ));
@@ -943,10 +1244,17 @@ async fn update_ffmpeg(app: AppHandle) -> Result<ToolUpdateResult, String> {
         })
         .await
         .map_err(|e| format!("Falha interna ao instalar o FFmpeg: {e}"))??;
+        invalidate_local_version(&directory.join("ffmpeg.exe"));
+        invalidate_local_version(&directory.join("ffprobe.exe"));
 
         let installed_validation = async {
-            let installed_ffmpeg = ffmpeg_version(&directory.join("ffmpeg.exe")).await?;
-            let installed_ffprobe = ffprobe_version(&directory.join("ffprobe.exe")).await?;
+            let (installed_ffmpeg, installed_ffprobe) = futures_util::future::join(
+                ffmpeg_version(&directory.join("ffmpeg.exe")),
+                ffprobe_version(&directory.join("ffprobe.exe")),
+            )
+            .await;
+            let installed_ffmpeg = installed_ffmpeg?;
+            let installed_ffprobe = installed_ffprobe?;
             if !ffmpeg_release_matches(&installed_ffmpeg, &remote_version)
                 || !ffmpeg_release_matches(&installed_ffprobe, &remote_version)
             {
@@ -1000,7 +1308,7 @@ async fn update_ffmpeg(app: AppHandle) -> Result<ToolUpdateResult, String> {
     }
     update_result?;
 
-    let current_version = ffmpeg_version(&executable).await?;
+    let current_version = ffmpeg_version_cached(&executable).await?;
     Ok(ToolUpdateResult {
         tool: "ffmpeg".to_owned(),
         status: "updated".to_owned(),
@@ -1028,7 +1336,7 @@ async fn search_videos(app: AppHandle, query: String) -> Result<Vec<SearchResult
         }
     }
 
-    let _operation = tool_operation_lock()
+    let _operation = yt_dlp_operation_lock()
         .try_read()
         .map_err(|_| "Aguarde a atualização do yt-dlp terminar.".to_owned())?;
     let executable = require_tool(&app, "yt-dlp.exe")?;
@@ -1240,7 +1548,10 @@ async fn start_download(
     app: AppHandle,
     request: DownloadRequest,
 ) -> Result<DownloadResult, String> {
-    let _operation = tool_operation_lock()
+    let _yt_dlp_operation = yt_dlp_operation_lock()
+        .try_read()
+        .map_err(|_| "Aguarde a atualização das ferramentas terminar.".to_owned())?;
+    let _ffmpeg_operation = ffmpeg_operation_lock()
         .try_read()
         .map_err(|_| "Aguarde a atualização das ferramentas terminar.".to_owned())?;
     if request.url.trim().is_empty() {
@@ -1425,6 +1736,21 @@ mod tests {
     }
 
     #[test]
+    fn parses_latest_version_from_yt_dlp_updater_output() {
+        let output = "\
+Current version: stable@2026.06.30 from yt-dlp/yt-dlp
+Latest version: stable@2026.07.04 from yt-dlp/yt-dlp
+Updated yt-dlp to stable@2026.07.04.";
+        assert_eq!(
+            parse_yt_dlp_update_version(output).as_deref(),
+            Some("2026.07.04")
+        );
+        assert!(valid_yt_dlp_version("2026.07.04"));
+        assert!(!valid_yt_dlp_version("2026.07.04."));
+        assert!(!valid_yt_dlp_version("latest"));
+    }
+
+    #[test]
     fn recognizes_ffmpeg_git_builds() {
         assert!(is_ffmpeg_git_build("2026-07-09-git-8de8405796"));
         assert!(is_ffmpeg_git_build("N-123456-gabc123"));
@@ -1433,7 +1759,14 @@ mod tests {
             git_build_date("2026-07-27-git-a757b708ae-essentials_build"),
             Some("2026-07-27")
         );
-        assert!(ffmpeg_update_source("2026-07-27-git-a757b708ae").is_some());
+        let git_source = ffmpeg_update_source("2026-07-27-git-a757b708ae").unwrap();
+        assert!(git_source.git_build);
+        assert!(git_source.seven_zip);
+        assert_eq!(git_source.archive_extension, "7z");
+        let release_source = ffmpeg_update_source("8.1.2-essentials_build").unwrap();
+        assert!(!release_source.git_build);
+        assert!(release_source.seven_zip);
+        assert_eq!(release_source.archive_extension, "7z");
         assert!(ffmpeg_update_source("N-123456-gabc123").is_none());
         assert!(local_release_is_newer("9.0-full_build", "8.1.2"));
         assert!(!local_release_is_newer("7.1.1", "8.1.2"));
