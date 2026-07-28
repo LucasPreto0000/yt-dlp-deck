@@ -1,6 +1,6 @@
 [package]
 name = "yt-dlp-deck"
-version = "1.1.9"
+version = "1.1.10"
 description = "Interface desktop para baixar mídia com yt-dlp"
 authors = ["YT-DLP Deck"]
 edition = "2021"

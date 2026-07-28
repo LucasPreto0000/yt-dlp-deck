@@ -4918,7 +4918,7 @@ input {
   .review-grid > section,
   .download-station,
   .history-library {
-    animation: component-enter 440ms var(--ease-out-premium) both;
+    animation: component-enter 440ms var(--ease-out-premium) backwards;
   }
 
   .card-grid .choice-card:nth-child(2),
