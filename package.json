@@ -1,7 +1,7 @@
 {
   "name": "yt-dlp-deck",
   "private": true,
-  "version": "1.1.6",
+  "version": "1.1.7",
   "description": "Interface desktop para yt-dlp, construída com Tauri e Rust",
   "scripts": {
     "tauri": "tauri",
