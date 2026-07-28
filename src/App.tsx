@@ -74,6 +74,7 @@ import type {
   SearchResult,
   SourceMode,
   ToolStatus,
+  ToolUpdateResult,
 } from "./types";
 import {
   appInvoke,
@@ -167,6 +168,7 @@ const isAudio = (format: FormatId | null) =>
   format === "mp3" || format === "flac" || format === "wav" || format === "m4a";
 
 type ToastTone = "info" | "success" | "error";
+type ToolId = "yt-dlp" | "ffmpeg";
 
 interface ToastItem {
   id: number;
@@ -300,25 +302,61 @@ function ToastViewport({ items }: { items: ToastItem[] }) {
 }
 
 function ToolBadge({
+  tool,
   label,
   ready,
   version,
   checking,
+  recentlyUpdated,
+  disabled,
+  onUpdate,
 }: {
+  tool: ToolId;
   label: string;
   ready: boolean;
   version?: string;
   checking: boolean;
+  recentlyUpdated: boolean;
+  disabled: boolean;
+  onUpdate: (tool: ToolId) => void;
 }) {
+  const action = isAndroidRuntime
+    ? "Ver informações de atualização"
+    : "Procurar atualização silenciosamente";
   return (
-    <div
-      className={`tool-badge ${ready ? "is-ready" : ""} ${checking ? "is-checking" : ""}`}
-      title={checking ? `Verificando ${label}` : version}
+    <button
+      type="button"
+      className={`tool-badge ${ready ? "is-ready" : ""} ${checking ? "is-checking" : ""} ${recentlyUpdated ? "is-updated" : ""}`}
+      title={checking
+        ? `Procurando atualização do ${label}`
+        : ready
+          ? `${version ? `${version} · ` : ""}${action}`
+          : `${label} não encontrado`}
+      aria-label={`${label} ${ready ? "instalado" : "não encontrado"}. ${action}`}
+      aria-busy={checking}
+      aria-disabled={!ready || disabled}
+      disabled={!ready}
+      onClick={() => {
+        if (!checking && !disabled) onUpdate(tool);
+      }}
     >
       <span className="tool-light" />
       <span>{label}</span>
-      {checking ? <LoaderCircle className="spin" size={12} /> : ready && <Check size={12} />}
-    </div>
+      <span className="tool-badge-icons" aria-hidden="true">
+        {checking ? (
+          <LoaderCircle className="spin" size={12} />
+        ) : ready ? (
+          isAndroidRuntime ? (
+            <Info className="tool-info-icon" size={12} />
+          ) : (
+            <>
+              <Check className="tool-ready-icon" size={12} />
+              <RotateCcw className="tool-update-icon" size={12} />
+            </>
+          )
+        ) : null}
+      </span>
+    </button>
   );
 }
 
@@ -610,6 +648,8 @@ function App() {
   const [wifiOnly, setWifiOnly] = useState(false);
   const [tools, setTools] = useState<ToolStatus | null>(null);
   const [checkingTools, setCheckingTools] = useState(true);
+  const [updatingTool, setUpdatingTool] = useState<ToolId | null>(null);
+  const [recentlyUpdatedTool, setRecentlyUpdatedTool] = useState<ToolId | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [downloadPercent, setDownloadPercent] = useState(0);
   const [downloadLines, setDownloadLines] = useState<string[]>([]);
@@ -894,6 +934,70 @@ function App() {
     }
   }
 
+  async function updateTool(tool: ToolId) {
+    const label = tool === "yt-dlp" ? "yt-dlp" : "FFmpeg";
+    if (isAndroidRuntime) {
+      pushToast(
+        "info",
+        `${label} incorporado`,
+        `No Android, o ${label} é atualizado junto com uma nova versão do aplicativo.`,
+      );
+      return;
+    }
+    if (downloading || (tool === "yt-dlp" && searching)) {
+      pushToast(
+        "info",
+        "Atualização aguardando",
+        downloading
+          ? `Finalize o download atual antes de atualizar o ${label}.`
+          : "Finalize a pesquisa atual antes de atualizar o yt-dlp.",
+      );
+      return;
+    }
+    if (updatingTool) return;
+
+    setUpdatingTool(tool);
+    setRecentlyUpdatedTool(null);
+    try {
+      const command = tool === "yt-dlp" ? "update_yt_dlp" : "update_ffmpeg";
+      const result = await appInvoke<ToolUpdateResult>(command);
+      setTools((current) => {
+        if (!current) return current;
+        return tool === "yt-dlp"
+          ? {
+              ...current,
+              ytDlp: true,
+              ytDlpVersion: result.currentVersion || current.ytDlpVersion,
+            }
+          : {
+              ...current,
+              ffmpeg: true,
+              ffmpegVersion: result.currentVersion || current.ffmpegVersion,
+            };
+      });
+      if (result.updated) {
+        setRecentlyUpdatedTool(tool);
+        const timer = window.setTimeout(() => {
+          setRecentlyUpdatedTool((current) => current === tool ? null : current);
+        }, 1_800);
+        toastTimersRef.current.push(timer);
+      }
+      pushToast(
+        result.updated ? "success" : "info",
+        result.updated
+          ? `${label} atualizado`
+          : result.status === "preserved"
+            ? `${label} preservado`
+            : `${label} já está atualizado`,
+        result.message,
+      );
+    } catch (error) {
+      pushToast("error", `Falha ao atualizar ${label}`, errorText(error));
+    } finally {
+      setUpdatingTool(null);
+    }
+  }
+
   function applySharedUrl(url: string) {
     let detected = "Outro";
     try {
@@ -1078,6 +1182,14 @@ function App() {
 
   async function searchVideos() {
     if (!searchAvailable || !searchQuery.trim()) return;
+    if (updatingTool === "yt-dlp") {
+      pushToast(
+        "info",
+        "yt-dlp em atualização",
+        "A pesquisa ficará disponível assim que a verificação terminar.",
+      );
+      return;
+    }
     const requestId = ++searchRequestRef.current;
     setSearching(true);
     setSearchError("");
@@ -1121,6 +1233,14 @@ function App() {
 
   async function startDownload() {
     if (!format || downloading) return;
+    if (updatingTool) {
+      pushToast(
+        "info",
+        "Ferramenta em atualização",
+        "O download ficará disponível assim que a verificação terminar.",
+      );
+      return;
+    }
     const startedAt = Date.now();
     const desktopJobId = globalThis.crypto?.randomUUID?.() || `download-${startedAt}`;
     if (isAndroidRuntime) {
@@ -1450,7 +1570,7 @@ function App() {
                   <button
                     className="primary-button"
                     onClick={searchVideos}
-                    disabled={!searchQuery.trim() || searching}
+                    disabled={!searchQuery.trim() || searching || updatingTool === "yt-dlp"}
                   >
                     {searching ? <LoaderCircle className="spin" size={18} /> : <Search size={18} />}
                     {searching ? "Buscando" : "Buscar"}
@@ -1831,7 +1951,7 @@ function App() {
             <button
               className="download-button"
               onClick={startDownload}
-              disabled={downloading}
+              disabled={downloading || updatingTool !== null}
             >
               <span className="button-shine" />
               {downloading ? <LoaderCircle className="spin" /> : <Download />}
@@ -2190,16 +2310,24 @@ function App() {
         </div>
         <div className="tools">
           <ToolBadge
+            tool="yt-dlp"
             label="yt-dlp"
             ready={Boolean(tools?.ytDlp)}
             version={tools?.ytDlpVersion}
-            checking={checkingTools}
+            checking={checkingTools || updatingTool === "yt-dlp"}
+            recentlyUpdated={recentlyUpdatedTool === "yt-dlp"}
+            disabled={checkingTools || updatingTool !== null}
+            onUpdate={updateTool}
           />
           <ToolBadge
+            tool="ffmpeg"
             label="FFmpeg"
             ready={Boolean(tools?.ffmpeg)}
             version={tools?.ffmpegVersion}
-            checking={checkingTools}
+            checking={checkingTools || updatingTool === "ffmpeg"}
+            recentlyUpdated={recentlyUpdatedTool === "ffmpeg"}
+            disabled={checkingTools || updatingTool !== null}
+            onUpdate={updateTool}
           />
         </div>
       </header>

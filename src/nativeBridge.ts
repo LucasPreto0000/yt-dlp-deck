@@ -3,6 +3,8 @@ import { listen } from "@tauri-apps/api/event";
 
 const mobileCommands: Record<string, string> = {
   get_tool_status: "check_tools",
+  update_yt_dlp: "update_yt_dlp",
+  update_ffmpeg: "update_ffmpeg",
   search_videos: "search_videos",
   start_download: "start_download",
   open_downloads_folder: "open_downloads_folder",

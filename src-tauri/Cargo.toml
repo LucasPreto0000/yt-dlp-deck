@@ -1,6 +1,6 @@
 [package]
 name = "yt-dlp-deck"
-version = "1.1.10"
+version = "1.1.11"
 description = "Interface desktop para baixar mídia com yt-dlp"
 authors = ["YT-DLP Deck"]
 edition = "2021"
@@ -17,9 +17,11 @@ futures-util = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sevenz-rust2 = { version = "0.21", default-features = false, features = ["util"] }
+sha2 = "0.10"
 tauri = { version = "2", features = [] }
 tauri-plugin-mobile-downloader = { path = "plugins/mobile-downloader" }
-tokio = { version = "1", features = ["process", "fs", "io-util"] }
+tokio = { version = "1", features = ["process", "fs", "io-util", "sync", "time"] }
 zip = { version = "4", default-features = false, features = ["deflate"] }
 
 [target.'cfg(windows)'.dependencies]

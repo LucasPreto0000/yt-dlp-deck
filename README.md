@@ -7,9 +7,9 @@ FEITO INTEIRAMENTE POR IA, ENTAO TERÁ BUGS!!!!
 
 ## Downloads oficiais
 
-- [Baixar para Windows (`yt-dlp-deck.exe`)](https://github.com/LucasPreto0000/yt-dlp-deck/releases/download/v1.1.10/yt-dlp-deck.exe)
-- [Baixar para Android ARM64 (`.apk`)](https://github.com/LucasPreto0000/yt-dlp-deck/releases/download/v1.1.10/YT-DLP-Deck-Android-v1.1.10-arm64.apk)
-- [Ver a release completa e as notas da versão](https://github.com/LucasPreto0000/yt-dlp-deck/releases/tag/v1.1.10)
+- [Baixar para Windows (`yt-dlp-deck.exe`)](https://github.com/LucasPreto0000/yt-dlp-deck/releases/download/v1.1.11/yt-dlp-deck.exe)
+- [Baixar para Android ARM64 (`.apk`)](https://github.com/LucasPreto0000/yt-dlp-deck/releases/download/v1.1.11/YT-DLP-Deck-Android-v1.1.11-arm64.apk)
+- [Ver a release completa e as notas da versão](https://github.com/LucasPreto0000/yt-dlp-deck/releases/tag/v1.1.11)
 
 O APK é compatível com Android 13 ou superior em aparelhos ARM64. No Android,
 pode ser necessário permitir a instalação de aplicativos desconhecidos.
@@ -25,6 +25,10 @@ Ao abrir, o aplicativo verifica se estes dois arquivos estão na mesma pasta do
 Se algum estiver ausente, a interface mostra um aviso e permite checar novamente
 depois que os arquivos forem colocados na pasta.
 
+Quando os dois selos aparecem como prontos, clique em `yt-dlp` ou `FFmpeg` para
+procurar e instalar silenciosamente a atualização daquela ferramenta. O app
+valida o pacote do FFmpeg e restaura os executáveis anteriores se a troca falhar.
+
 Os arquivos baixados ficam em:
 
 `Downloads\YT-DLP Deck\<Plataforma>`
@@ -35,7 +39,7 @@ Os arquivos baixados ficam em:
 - central de download com thumbnail, estado visual e progresso animado;
 - console ao vivo com destaque de mensagens, controle de rolagem e cópia do log;
 - histórico agrupado por data com ações contextuais e estado vazio;
-- notificações animadas e verificação visual de yt-dlp e FFmpeg;
+- notificações animadas, verificação visual e atualização silenciosa de yt-dlp e FFmpeg;
 - interações consistentes com os cursores personalizados do aplicativo.
 
 ## Desenvolvimento
@@ -83,7 +87,7 @@ npm run android:build
 
 O resultado fica em:
 
-`src-tauri\target\android\YT-DLP-Deck-Android-v1.1.10-arm64.apk`
+`src-tauri\target\android\YT-DLP-Deck-Android-v1.1.11-arm64.apk`
 
 Para gerar um Android App Bundle:
 
@@ -93,7 +97,7 @@ npm run android:bundle
 
 O AAB fica em:
 
-`src-tauri\target\android\YT-DLP-Deck-Android-v1.1.10-arm64.aab`
+`src-tauri\target\android\YT-DLP-Deck-Android-v1.1.11-arm64.aab`
 
 Requisitos de compilação: JDK 17, Android SDK 36, Build Tools, NDK
 27.3.13750724 e os targets Rust do Android. O script também contorna o bloqueio
@@ -131,3 +135,4 @@ licença original estão em `src\assets\cursors`.
 
 - yt-dlp: `https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe`
 - FFmpeg para Windows: `https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip`
+- FFmpeg Git para Windows: `https://www.gyan.dev/ffmpeg/builds/ffmpeg-git-essentials.7z`

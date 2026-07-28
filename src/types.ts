@@ -11,6 +11,15 @@ export interface ToolStatus {
   toolsDir: string;
 }
 
+export interface ToolUpdateResult {
+  tool: "yt-dlp" | "ffmpeg";
+  status: "updated" | "current" | "preserved";
+  updated: boolean;
+  previousVersion?: string | null;
+  currentVersion?: string | null;
+  message: string;
+}
+
 export interface SetupProgress {
   tool: string;
   message: string;
