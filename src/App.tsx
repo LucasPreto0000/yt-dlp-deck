@@ -1655,6 +1655,15 @@ function App() {
     <MotionConfig reducedMotion="user">
     <div className="app-shell">
       <canvas className="gpu-backdrop" ref={gpuCanvasRef} aria-hidden="true" />
+      <div className="desktop-atmosphere" aria-hidden="true">
+        <span className="desktop-grid" />
+        <span className="desktop-aurora desktop-aurora-orange" />
+        <span className="desktop-aurora desktop-aurora-violet" />
+        <span className="desktop-aurora desktop-aurora-cyan" />
+        <span className="desktop-orbit desktop-orbit-one" />
+        <span className="desktop-orbit desktop-orbit-two" />
+        <span className="desktop-beam" />
+      </div>
       <div className="ambient ambient-one" />
       <div className="ambient ambient-two" />
       <div className="noise" />
