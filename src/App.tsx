@@ -130,7 +130,7 @@ const formats: Array<{
   { id: "wav", label: "WAV", description: "Sem compressão", category: "Áudio", icon: FileAudio, color: "#dfe8ff" },
   { id: "m4a", label: "M4A", description: "Eficiente e moderno", category: "Áudio", icon: FileAudio, color: "#9d9cff" },
   { id: "image", label: "Imagem (capa)", description: "Capa original do vídeo", category: "Imagem", icon: ImageDown, color: "#ff9f68" },
-  { id: "subtitle", label: "Legenda", description: "Do autor ou automática", category: "Legenda", icon: Subtitles, color: "#62e6b6" },
+  { id: "subtitle", label: "Legenda junto", description: "Ative junto com vídeo ou áudio", category: "Legenda", icon: Subtitles, color: "#62e6b6" },
 ];
 
 const qualities: Array<{ id: QualityId; label: string; detail: string }> = [
@@ -171,7 +171,6 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
 const isAudio = (format: FormatId | null) =>
   format === "mp3" || format === "flac" || format === "wav" || format === "m4a";
 const isImage = (format: FormatId | null) => format === "image";
-const isSubtitle = (format: FormatId | null) => format === "subtitle";
 const supportsImageCover = (platform: string | null) =>
   platform === "TikTok" || platform === "Instagram";
 
@@ -651,6 +650,7 @@ function App() {
   const [selectedResult, setSelectedResult] = useState<number | null>(null);
   const [previewMedia, setPreviewMedia] = useState<SearchResult | null>(null);
   const [format, setFormat] = useState<FormatId | null>(null);
+  const [downloadSubtitles, setDownloadSubtitles] = useState(false);
   const [quality, setQuality] = useState<QualityId>("best");
   const [cookies, setCookies] = useState<CookieId>("none");
   const [cookieFile, setCookieFile] = useState("");
@@ -731,9 +731,7 @@ function App() {
     : mobileCurrentStatus === "processing"
       ? isImage(format)
         ? "Preparando imagem"
-        : isSubtitle(format)
-          ? "Preparando legenda"
-          : "Processando com FFmpeg"
+        : "Processando com FFmpeg"
       : mobileCurrentStatus === "saving"
         ? "Salvando arquivo"
         : downloading
@@ -1330,7 +1328,7 @@ function App() {
     const initialLines = isAndroidRuntime
       ? [
           "[sistema] Abrindo console Android…",
-          isImage(format) || isSubtitle(format)
+          isImage(format)
             ? "[sistema] Preparando o yt-dlp incorporado…"
             : "[sistema] Preparando yt-dlp e FFmpeg incorporados…",
         ]
@@ -1344,6 +1342,7 @@ function App() {
       url: activeUrl.trim(),
       platformFolder: platformFolder.trim(),
       format,
+      subtitles: downloadSubtitles,
       quality,
       cookies,
       cookieFile: cookieFile.trim() || null,
@@ -1469,16 +1468,17 @@ function App() {
         : `-o "Downloads\\YT-DLP Deck\\${platformFolder}\\%(uploader)s - %(title)s [%(id)s].%(ext)s"`,
       "--no-playlist",
     ];
-    if (!isImage(format) && !isSubtitle(format)) parts.push("--add-metadata", "--concurrent-fragments 4");
+    if (!isImage(format)) parts.push("--add-metadata", "--concurrent-fragments 4");
     if (cookies === "file" && cookieFile) parts.push(`--cookies "${cookieFile}"`);
     else if (cookies !== "none") parts.push(`--cookies-from-browser ${cookies}`);
     if (isAudio(format)) parts.push(`-x --audio-format ${format} --audio-quality 0`);
     else if (isImage(format)) parts.push("--skip-download --write-thumbnail --ignore-no-formats-error");
-    else if (isSubtitle(format)) {
-      parts.push("--skip-download --write-subs --write-auto-subs");
-      parts.push('--sub-langs "pt-BR,pt,pt.*,en,en.*" --sub-format "vtt/srt/best"');
-    } else {
+    else {
       parts.push(`-f "${quality}" --merge-output-format ${format === "best" ? "mkv" : format}`);
+    }
+    if (downloadSubtitles) {
+      parts.push("--write-subs --write-auto-subs");
+      parts.push('--sub-langs "pt-BR,pt,pt.*,en,en.*" --sub-format "vtt/srt/best"');
     }
     parts.push("--", `"${activeUrl}"`);
     return parts.join(" \\\n  ");
@@ -1711,7 +1711,7 @@ function App() {
         <PageHeader
           eyebrow="Passo 03 · formato"
           title={<>Escolha como a mídia deve <em>chegar até você.</em></>}
-          description="Baixe vídeo, áudio, a capa do post ou a melhor legenda disponível sem sair deste fluxo."
+          description="Escolha a mídia e ative a legenda como complemento para salvar os dois arquivos juntos."
           icon={Film}
         />
         <div className="format-sections">
@@ -1735,16 +1735,30 @@ function App() {
                   .map((item) => (
                     <ChoiceCard
                       key={item.id}
-                      active={format === item.id}
+                      active={item.id === "subtitle" ? downloadSubtitles : format === item.id}
                       icon={item.icon}
                       color={item.color}
                       title={item.label}
                       description={item.description}
                       tag={item.category}
-                      onClick={() => setFormat(item.id)}
+                      onClick={() => {
+                        if (item.id === "subtitle") {
+                          setDownloadSubtitles((current) => !current);
+                          if (format === "image") setFormat(null);
+                        } else {
+                          setFormat(item.id);
+                          if (item.id === "image") setDownloadSubtitles(false);
+                        }
+                      }}
                       onDoubleClick={() => {
-                        setFormat(item.id);
-                        setStep(3);
+                        if (item.id === "subtitle") {
+                          setDownloadSubtitles(true);
+                          if (format && format !== "image") setStep(3);
+                        } else {
+                          setFormat(item.id);
+                          if (item.id === "image") setDownloadSubtitles(false);
+                          setStep(3);
+                        }
                       }}
                     />
                   ))}
@@ -1759,8 +1773,7 @@ function App() {
   function renderSettings() {
     const audio = format ? isAudio(format) : false;
     const image = isImage(format);
-    const subtitle = isSubtitle(format);
-    const qualityDisabled = audio || image || subtitle;
+    const qualityDisabled = audio || image;
     return (
       <>
         <PageHeader
@@ -1786,28 +1799,22 @@ function App() {
                     ? "Não se aplica ao formato de áudio"
                     : image
                       ? "A capa será salva na resolução original"
-                      : subtitle
-                        ? "O autor tem prioridade sobre a legenda automática"
-                        : "Com fallback automático"}
+                      : "Com fallback automático"}
                 </small>
               </div>
             </div>
             {qualityDisabled ? (
               <div className="audio-quality-message">
-                {audio ? <AudioLines size={28} /> : image ? <ImageDown size={28} /> : <Subtitles size={28} />}
+                {audio ? <AudioLines size={28} /> : <ImageDown size={28} />}
                 <strong>
                   {audio
                     ? "Qualidade máxima de áudio"
-                    : image
-                      ? "Melhor capa disponível"
-                      : "Melhor legenda disponível"}
+                    : "Melhor capa disponível"}
                 </strong>
                 <small>
                   {audio
                     ? "A conversão usará a melhor faixa disponível."
-                    : image
-                      ? "O arquivo original fornecido pela plataforma será preservado."
-                      : "Se o autor não enviou uma legenda, será usada a automática em português quando disponível."}
+                    : "O arquivo original fornecido pela plataforma será preservado."}
                 </small>
               </div>
             ) : (
@@ -2015,10 +2022,8 @@ function App() {
                     ? "Melhor faixa de áudio"
                     : isImage(format)
                       ? "Capa original"
-                      : isSubtitle(format)
-                        ? "Autor ou automática em português"
-                        : selectedQuality?.label || "—"
-                }`}
+                      : selectedQuality?.label || "—"
+                }${downloadSubtitles ? " · + legenda" : ""}`}
               />
               <ReviewRow icon={Cookie} label="Acesso" value={selectedCookie?.label || "—"} />
               {!chosenMedia && <ReviewRow icon={Link2} label="URL" value={activeUrl} />}
@@ -2075,7 +2080,7 @@ function App() {
                     ? "Toque em Retomar para continuar"
                     : downloading
                       ? "Acompanhe o console em tempo real"
-                      : isImage(format) || isSubtitle(format)
+                      : isImage(format)
                         ? "Extrair diretamente com yt-dlp"
                         : "Executar com yt-dlp + FFmpeg"}
                 </small>

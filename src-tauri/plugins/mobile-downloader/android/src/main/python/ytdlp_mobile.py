@@ -223,6 +223,35 @@ def _auxiliary_result(info, path):
     )
 
 
+def _download_subtitle(url, work_dir, info, common_options, callback):
+    language, automatic = _select_subtitle(info)
+    if automatic:
+        callback.onLog(
+            f"[legenda] Nenhuma legenda do autor encontrada; usando legenda "
+            f"automática/traduzida: {language}."
+        )
+    else:
+        callback.onLog(f"[legenda] Legenda do autor selecionada: {language}.")
+    subtitle_options = {
+        **common_options,
+        "ignore_no_formats_error": True,
+        "outtmpl": os.path.join(work_dir, "%(title).150B [%(id)s].%(ext)s"),
+        "skip_download": True,
+        "subtitlesformat": "vtt/srt/best",
+        "subtitleslangs": [language],
+        "writeautomaticsub": automatic,
+        "writesubtitles": not automatic,
+    }
+    with YoutubeDL(subtitle_options) as ydl:
+        callback.checkpoint()
+        subtitle_info = ydl.extract_info(url, download=True) or info
+    path = _find_output(work_dir, _SUBTITLE_EXTENSIONS)
+    if not path:
+        raise RuntimeError("O yt-dlp não conseguiu salvar a legenda selecionada.")
+    callback.onLog(f"[legenda] Arquivo recebido: {os.path.basename(path)}")
+    return subtitle_info, path
+
+
 def _progress_hook(callback, expected_tracks):
     completed_tracks = 0
     current_format = None
@@ -277,6 +306,7 @@ def download(
     work_dir,
     media_format,
     quality,
+    download_subtitles,
     concurrent_fragments,
     cookie_file,
     quickjs_path,
@@ -340,30 +370,9 @@ def download(
         return _auxiliary_result(image_info, path)
 
     if media_format == "subtitle":
-        language, automatic = _select_subtitle(info)
-        if automatic:
-            callback.onLog(
-                f"[legenda] Nenhuma legenda do autor encontrada; usando legenda "
-                f"automática/traduzida: {language}."
-            )
-        else:
-            callback.onLog(f"[legenda] Legenda do autor selecionada: {language}.")
-        subtitle_options = {
-            **common_options,
-            "ignore_no_formats_error": True,
-            "outtmpl": os.path.join(work_dir, "%(title).150B [%(id)s].%(ext)s"),
-            "skip_download": True,
-            "subtitlesformat": "vtt/srt/best",
-            "subtitleslangs": [language],
-            "writeautomaticsub": automatic,
-            "writesubtitles": not automatic,
-        }
-        with YoutubeDL(subtitle_options) as ydl:
-            callback.checkpoint()
-            subtitle_info = ydl.extract_info(url, download=True) or info
-        path = _find_output(work_dir, _SUBTITLE_EXTENSIONS)
-        if not path:
-            raise RuntimeError("O yt-dlp não conseguiu salvar a legenda selecionada.")
+        subtitle_info, path = _download_subtitle(
+            url, work_dir, info, common_options, callback
+        )
         callback.onExpectedSize(os.path.getsize(path))
         callback.onProgress("[download] 88.0% Legenda recebida.")
         return _auxiliary_result(subtitle_info, path)
@@ -453,11 +462,19 @@ def download(
                 "O yt-dlp não conseguiu baixar todas as faixas de vídeo e áudio."
             )
 
+    sidecar_files = []
+    if download_subtitles:
+        _, subtitle_path = _download_subtitle(
+            url, work_dir, info, common_options, callback
+        )
+        sidecar_files.append(subtitle_path)
+
     return json.dumps(
         {
             "id": str(info.get("id") or ""),
             "title": info.get("title") or "download",
             "files": files,
+            "sidecar_files": sidecar_files,
         },
         ensure_ascii=False,
     )

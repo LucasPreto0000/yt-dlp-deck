@@ -138,6 +138,8 @@ struct DownloadRequest {
     url: String,
     platform_folder: String,
     format: String,
+    #[serde(default)]
+    subtitles: bool,
     quality: Option<String>,
     cookies: String,
     cookie_file: Option<String>,
@@ -1609,22 +1611,10 @@ fn build_download_args(
             "--write-thumbnail".to_owned(),
             "--ignore-no-formats-error".to_owned(),
         ]),
-        "subtitle" => {
-            let selection = subtitle.expect("subtitle selection must be probed");
-            args.push(if selection.automatic {
-                "--write-auto-subs".to_owned()
-            } else {
-                "--write-subs".to_owned()
-            });
-            args.extend([
-                "--skip-download".to_owned(),
-                "--sub-langs".to_owned(),
-                selection.language.clone(),
-                "--sub-format".to_owned(),
-                "vtt/srt/best".to_owned(),
-                "--ignore-no-formats-error".to_owned(),
-            ]);
-        }
+        "subtitle" => args.extend([
+            "--skip-download".to_owned(),
+            "--ignore-no-formats-error".to_owned(),
+        ]),
         "mp3" | "flac" | "wav" | "m4a" => args.extend([
             "-x".to_owned(),
             "--audio-format".to_owned(),
@@ -1641,6 +1631,20 @@ fn build_download_args(
                 args.extend(["--merge-output-format".to_owned(), container.to_owned()]);
             }
         }
+    }
+    if request.subtitles || request.format == "subtitle" {
+        let selection = subtitle.expect("subtitle selection must be probed");
+        args.push(if selection.automatic {
+            "--write-auto-subs".to_owned()
+        } else {
+            "--write-subs".to_owned()
+        });
+        args.extend([
+            "--sub-langs".to_owned(),
+            selection.language.clone(),
+            "--sub-format".to_owned(),
+            "vtt/srt/best".to_owned(),
+        ]);
     }
     args.extend(["--".to_owned(), request.url.trim().to_owned()]);
     args
@@ -1732,7 +1736,7 @@ async fn start_download(
         Some(require_tool(&app, "ffmpeg.exe")?)
     };
     let js_runtime = javascript_runtime(&app);
-    let subtitle = if request.format == "subtitle" {
+    let subtitle = if request.subtitles || request.format == "subtitle" {
         let selection = probe_subtitle(&executable, &request, js_runtime.as_deref()).await?;
         let detail = if selection.automatic {
             format!(
@@ -1810,6 +1814,7 @@ async fn start_download(
         let message = match request.format.as_str() {
             "image" => "Imagem de capa salva com sucesso.",
             "subtitle" => "Legenda salva com sucesso.",
+            _ if request.subtitles => "Download e legenda salvos com sucesso.",
             _ => "Download concluído com sucesso.",
         };
         Ok(DownloadResult {
@@ -2025,6 +2030,7 @@ Updated yt-dlp to stable@2026.07.04.";
             url: "--exec=calc.exe".to_owned(),
             platform_folder: "YouTube".to_owned(),
             format: "mp3".to_owned(),
+            subtitles: false,
             quality: Some("best".to_owned()),
             cookies: "none".to_owned(),
             cookie_file: None,
@@ -2056,6 +2062,7 @@ Updated yt-dlp to stable@2026.07.04.";
             url: "https://www.instagram.com/reel/example/".to_owned(),
             platform_folder: "Instagram".to_owned(),
             format: format.to_owned(),
+            subtitles: false,
             quality: None,
             cookies: "none".to_owned(),
             cookie_file: None,
@@ -2088,6 +2095,29 @@ Updated yt-dlp to stable@2026.07.04.";
         );
         assert!(args.iter().any(|argument| argument == "--write-subs"));
         assert!(!args.iter().any(|argument| argument == "--write-auto-subs"));
+        assert!(args.windows(2).any(|pair| pair == ["--sub-langs", "pt-BR"]));
+    }
+
+    #[test]
+    fn subtitle_can_be_downloaded_alongside_mp4() {
+        let mut request = auxiliary_request("mp4");
+        request.subtitles = true;
+        request.quality = Some("1080p".to_owned());
+        let automatic = SubtitleSelection {
+            language: "pt-BR".to_owned(),
+            automatic: true,
+        };
+        let args = build_download_args(
+            &request,
+            Path::new("output.%(ext)s"),
+            Some(Path::new("ffmpeg.exe")),
+            None,
+            Some(&automatic),
+        );
+        assert!(args
+            .iter()
+            .any(|argument| argument == "--merge-output-format"));
+        assert!(args.iter().any(|argument| argument == "--write-auto-subs"));
         assert!(args.windows(2).any(|pair| pair == ["--sub-langs", "pt-BR"]));
     }
 

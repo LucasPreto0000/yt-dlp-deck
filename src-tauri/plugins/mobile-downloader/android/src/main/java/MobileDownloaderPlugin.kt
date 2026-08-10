@@ -59,6 +59,7 @@ class DownloadRequestArgs {
     lateinit var url: String
     lateinit var platformFolder: String
     lateinit var format: String
+    var subtitles: Boolean = false
     var quality: String? = null
     var cookies: String = "none"
     var cookieFile: String? = null
@@ -316,6 +317,7 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
                         workDir.absolutePath,
                         request.format,
                         request.quality ?: "best",
+                        request.subtitles,
                         adaptiveFragmentCount(),
                         request.cookieFile.orEmpty(),
                         quickJsPath(),
@@ -340,12 +342,25 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
                 emitRecordState(record)
                 progress.onProgress("[download] 97.0% Salvando na pasta de destino…")
                 val saved = saveToDownloads(converted, platform, progress)
+                val sidecarFiles = result.optJSONArray("sidecar_files")
+                if (sidecarFiles != null) {
+                    for (index in 0 until sidecarFiles.length()) {
+                        val sidecar = File(sidecarFiles.getString(index))
+                        check(sidecar.isFile) { "O arquivo de legenda não foi encontrado." }
+                        progress.onLog("[legenda] Salvando ${sidecar.name} junto com a mídia…")
+                        saveToDownloads(sidecar, platform, progress)
+                    }
+                }
                 record.status = "completed"
                 record.percent = 100.0
                 record.message = when (request.format) {
                     "image" -> "Imagem de capa salva com sucesso."
                     "subtitle" -> "Legenda salva com sucesso."
-                    else -> "Download concluído com sucesso."
+                    else -> if (request.subtitles) {
+                        "Download e legenda salvos com sucesso."
+                    } else {
+                        "Download concluído com sucesso."
+                    }
                 }
                 record.outputDir = saved.displayLocation
                 record.fileUri = saved.uri.toString()
@@ -688,6 +703,9 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
     private fun validateDownloadRequest(request: DownloadRequestArgs) {
         require(request.url.isNotBlank()) { "Informe uma URL antes de iniciar o download." }
         require(request.format in SUPPORTED_FORMATS) { "O formato solicitado não é suportado." }
+        require(!(request.format == "image" && request.subtitles)) {
+            "Escolha um formato de vídeo ou áudio para baixar a legenda junto."
+        }
         val uri = validatedHttpUri(request.url)
         if (request.format == "image") {
             val host = uri.host.orEmpty().lowercase(Locale.ROOT)

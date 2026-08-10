@@ -55,6 +55,7 @@ export interface DownloadRequest {
   url: string;
   platformFolder: string;
   format: FormatId;
+  subtitles: boolean;
   quality: QualityId;
   cookies: CookieId;
   cookieFile: string | null;
