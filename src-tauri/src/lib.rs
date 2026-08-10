@@ -143,6 +143,12 @@ struct DownloadRequest {
     cookie_file: Option<String>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct SubtitleSelection {
+    language: String,
+    automatic: bool,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DownloadResult {
@@ -1444,34 +1450,80 @@ fn quality_selector(quality: Option<&str>) -> Option<&'static str> {
     }
 }
 
-fn build_download_args(
-    request: &DownloadRequest,
-    output_template: &Path,
-    ffmpeg: &Path,
-    js_runtime: Option<&str>,
-) -> Vec<String> {
-    let mut args = vec![
-        "-o".to_owned(),
-        output_template.to_string_lossy().into_owned(),
-        "--no-playlist".to_owned(),
-        "--add-metadata".to_owned(),
-        "--newline".to_owned(),
-        "--no-colors".to_owned(),
-        "--encoding".to_owned(),
-        "utf-8".to_owned(),
-        "--windows-filenames".to_owned(),
-        "--trim-filenames".to_owned(),
-        "180".to_owned(),
-        "--concurrent-fragments".to_owned(),
-        "4".to_owned(),
-        "--ffmpeg-location".to_owned(),
-        ffmpeg.to_string_lossy().into_owned(),
-    ];
+fn is_auxiliary_format(format: &str) -> bool {
+    matches!(format, "image" | "subtitle")
+}
 
+fn supports_image_cover_url(url: &str) -> bool {
+    reqwest::Url::parse(url).ok().is_some_and(|url| {
+        url.host_str().is_some_and(|host| {
+            let host = host.to_ascii_lowercase();
+            host == "tiktok.com"
+                || host.ends_with(".tiktok.com")
+                || host == "instagram.com"
+                || host.ends_with(".instagram.com")
+        })
+    })
+}
+
+fn safe_subtitle_language(language: &str) -> bool {
+    !language.is_empty()
+        && language.len() <= 64
+        && language != "live_chat"
+        && language
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn subtitle_language_rank(language: &str) -> (u8, String) {
+    let normalized = language.to_ascii_lowercase();
+    let rank = if matches!(normalized.as_str(), "pt-br" | "pt_br") {
+        0
+    } else if normalized == "pt" {
+        1
+    } else if normalized.starts_with("pt-") || normalized.starts_with("pt_") {
+        2
+    } else if normalized == "en" {
+        3
+    } else if normalized.starts_with("en-") || normalized.starts_with("en_") {
+        4
+    } else {
+        5
+    };
+    (rank, normalized)
+}
+
+fn best_subtitle_language(collection: Option<&Value>) -> Option<String> {
+    let entries = collection?.as_object()?;
+    let mut languages = entries
+        .keys()
+        .filter(|language| safe_subtitle_language(language))
+        .cloned()
+        .collect::<Vec<_>>();
+    languages.sort_by_key(|language| subtitle_language_rank(language));
+    languages.into_iter().next()
+}
+
+fn select_subtitle(info: &Value) -> Option<SubtitleSelection> {
+    best_subtitle_language(info.get("subtitles"))
+        .map(|language| SubtitleSelection {
+            language,
+            automatic: false,
+        })
+        .or_else(|| {
+            best_subtitle_language(info.get("automatic_captions")).map(|language| {
+                SubtitleSelection {
+                    language,
+                    automatic: true,
+                }
+            })
+        })
+}
+
+fn append_access_args(args: &mut Vec<String>, request: &DownloadRequest, js_runtime: Option<&str>) {
     if let Some(runtime) = js_runtime {
         args.extend(["--js-runtimes".to_owned(), runtime.to_owned()]);
     }
-
     match request.cookies.as_str() {
         "chrome" | "edge" | "firefox" => {
             args.extend(["--cookies-from-browser".to_owned(), request.cookies.clone()]);
@@ -1487,8 +1539,92 @@ fn build_download_args(
         }
         _ => {}
     }
+}
+
+async fn probe_subtitle(
+    executable: &Path,
+    request: &DownloadRequest,
+    js_runtime: Option<&str>,
+) -> Result<SubtitleSelection, String> {
+    let mut args = vec![
+        "--no-config".to_owned(),
+        "--dump-single-json".to_owned(),
+        "--skip-download".to_owned(),
+        "--ignore-no-formats-error".to_owned(),
+        "--no-playlist".to_owned(),
+        "--no-warnings".to_owned(),
+        "--encoding".to_owned(),
+        "utf-8".to_owned(),
+    ];
+    append_access_args(&mut args, request, js_runtime);
+    args.extend(["--".to_owned(), request.url.trim().to_owned()]);
+    let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    let output = command_output(executable, &refs, 45).await?;
+    let info: Value = serde_json::from_str(&output)
+        .map_err(|error| format!("O yt-dlp retornou metadados inválidos: {error}"))?;
+    select_subtitle(&info).ok_or_else(|| {
+        "Este vídeo não possui legendas do autor nem legendas automáticas disponíveis.".to_owned()
+    })
+}
+
+fn build_download_args(
+    request: &DownloadRequest,
+    output_template: &Path,
+    ffmpeg: Option<&Path>,
+    js_runtime: Option<&str>,
+    subtitle: Option<&SubtitleSelection>,
+) -> Vec<String> {
+    let mut args = vec![
+        "--no-config".to_owned(),
+        "-o".to_owned(),
+        output_template.to_string_lossy().into_owned(),
+        "--no-playlist".to_owned(),
+        "--newline".to_owned(),
+        "--no-colors".to_owned(),
+        "--encoding".to_owned(),
+        "utf-8".to_owned(),
+        "--windows-filenames".to_owned(),
+        "--trim-filenames".to_owned(),
+        "180".to_owned(),
+    ];
+
+    if !is_auxiliary_format(&request.format) {
+        args.extend([
+            "--add-metadata".to_owned(),
+            "--concurrent-fragments".to_owned(),
+            "4".to_owned(),
+        ]);
+        if let Some(ffmpeg) = ffmpeg {
+            args.extend([
+                "--ffmpeg-location".to_owned(),
+                ffmpeg.to_string_lossy().into_owned(),
+            ]);
+        }
+    }
+    append_access_args(&mut args, request, js_runtime);
 
     match request.format.as_str() {
+        "image" => args.extend([
+            "--skip-download".to_owned(),
+            "--write-thumbnail".to_owned(),
+            "--ignore-no-formats-error".to_owned(),
+        ]),
+        "subtitle" => {
+            let selection = subtitle.expect("subtitle selection must be probed");
+            args.push(if selection.automatic {
+                "--write-auto-subs".to_owned()
+            } else {
+                "--write-subs".to_owned()
+            });
+            args.extend([
+                "--skip-download".to_owned(),
+                "--sub-langs".to_owned(),
+                selection.language.clone(),
+                "--sub-format".to_owned(),
+                "vtt/srt/best".to_owned(),
+                "--ignore-no-formats-error".to_owned(),
+            ]);
+        }
         "mp3" | "flac" | "wav" | "m4a" => args.extend([
             "-x".to_owned(),
             "--audio-format".to_owned(),
@@ -1548,17 +1684,38 @@ async fn start_download(
     app: AppHandle,
     request: DownloadRequest,
 ) -> Result<DownloadResult, String> {
+    const SUPPORTED_FORMATS: &[&str] = &[
+        "best", "mp4", "mkv", "webm", "mp3", "flac", "wav", "m4a", "image", "subtitle",
+    ];
+    if !SUPPORTED_FORMATS.contains(&request.format.as_str()) {
+        return Err("O formato solicitado não é suportado.".to_owned());
+    }
+    if request.format == "image" && !supports_image_cover_url(request.url.trim()) {
+        return Err(
+            "A extração de imagem de capa está disponível para TikTok e Instagram.".to_owned(),
+        );
+    }
+    let auxiliary = is_auxiliary_format(&request.format);
     let _yt_dlp_operation = yt_dlp_operation_lock()
         .try_read()
         .map_err(|_| "Aguarde a atualização das ferramentas terminar.".to_owned())?;
-    let _ffmpeg_operation = ffmpeg_operation_lock()
-        .try_read()
-        .map_err(|_| "Aguarde a atualização das ferramentas terminar.".to_owned())?;
+    let _ffmpeg_operation = if auxiliary {
+        None
+    } else {
+        Some(
+            ffmpeg_operation_lock()
+                .try_read()
+                .map_err(|_| "Aguarde a atualização das ferramentas terminar.".to_owned())?,
+        )
+    };
     if request.url.trim().is_empty() {
         return Err("Informe uma URL antes de iniciar o download.".to_owned());
     }
     let status = get_tool_status_internal(&app).await?;
-    if !status.yt_dlp || !status.ffmpeg {
+    if !status.yt_dlp {
+        return Err("O yt-dlp precisa estar instalado.".to_owned());
+    }
+    if !auxiliary && !status.ffmpeg {
         return Err("yt-dlp e FFmpeg precisam estar instalados.".to_owned());
     }
 
@@ -1569,9 +1726,37 @@ async fn start_download(
         .map_err(|e| format!("Falha ao criar a pasta de destino: {e}"))?;
     let output_template = output_dir.join("%(uploader)s - %(title)s [%(id)s].%(ext)s");
     let executable = require_tool(&app, "yt-dlp.exe")?;
-    let ffmpeg = require_tool(&app, "ffmpeg.exe")?;
+    let ffmpeg = if auxiliary {
+        None
+    } else {
+        Some(require_tool(&app, "ffmpeg.exe")?)
+    };
     let js_runtime = javascript_runtime(&app);
-    let args = build_download_args(&request, &output_template, &ffmpeg, js_runtime.as_deref());
+    let subtitle = if request.format == "subtitle" {
+        let selection = probe_subtitle(&executable, &request, js_runtime.as_deref()).await?;
+        let detail = if selection.automatic {
+            format!(
+                "[legenda] Nenhuma legenda do autor encontrada; usando legenda automática/traduzida: {}.",
+                selection.language
+            )
+        } else {
+            format!(
+                "[legenda] Legenda do autor selecionada: {}.",
+                selection.language
+            )
+        };
+        let _ = app.emit("download-output", detail);
+        Some(selection)
+    } else {
+        None
+    };
+    let args = build_download_args(
+        &request,
+        &output_template,
+        ffmpeg.as_deref(),
+        js_runtime.as_deref(),
+        subtitle.as_ref(),
+    );
 
     let mut command = Command::new(executable);
     command
@@ -1622,10 +1807,15 @@ async fn start_download(
     }
 
     if exit.success() {
+        let message = match request.format.as_str() {
+            "image" => "Imagem de capa salva com sucesso.",
+            "subtitle" => "Legenda salva com sucesso.",
+            _ => "Download concluído com sucesso.",
+        };
         Ok(DownloadResult {
             success: true,
             output_dir: output_dir_text,
-            message: "Download concluído com sucesso.".to_owned(),
+            message: message.to_owned(),
         })
     } else {
         Err(format!(
@@ -1842,8 +2032,9 @@ Updated yt-dlp to stable@2026.07.04.";
         let args = build_download_args(
             &request,
             Path::new("output.%(ext)s"),
-            Path::new("ffmpeg.exe"),
+            Some(Path::new("ffmpeg.exe")),
             Some("node:C:\\Program Files\\nodejs\\node.exe"),
+            None,
         );
         let separator = args
             .iter()
@@ -1858,5 +2049,83 @@ Updated yt-dlp to stable@2026.07.04.";
             .iter()
             .any(|argument| argument == "--windows-filenames"));
         assert!(args.iter().any(|argument| argument.starts_with("node:")));
+    }
+
+    fn auxiliary_request(format: &str) -> DownloadRequest {
+        DownloadRequest {
+            url: "https://www.instagram.com/reel/example/".to_owned(),
+            platform_folder: "Instagram".to_owned(),
+            format: format.to_owned(),
+            quality: None,
+            cookies: "none".to_owned(),
+            cookie_file: None,
+        }
+    }
+
+    #[test]
+    fn image_download_writes_only_the_thumbnail() {
+        let request = auxiliary_request("image");
+        let args = build_download_args(&request, Path::new("output.%(ext)s"), None, None, None);
+        assert!(args.iter().any(|argument| argument == "--write-thumbnail"));
+        assert!(args.iter().any(|argument| argument == "--skip-download"));
+        assert!(!args.iter().any(|argument| argument == "-f"));
+        assert!(!args.iter().any(|argument| argument == "--ffmpeg-location"));
+    }
+
+    #[test]
+    fn subtitle_download_uses_the_exact_selected_source() {
+        let request = auxiliary_request("subtitle");
+        let manual = SubtitleSelection {
+            language: "pt-BR".to_owned(),
+            automatic: false,
+        };
+        let args = build_download_args(
+            &request,
+            Path::new("output.%(ext)s"),
+            None,
+            None,
+            Some(&manual),
+        );
+        assert!(args.iter().any(|argument| argument == "--write-subs"));
+        assert!(!args.iter().any(|argument| argument == "--write-auto-subs"));
+        assert!(args.windows(2).any(|pair| pair == ["--sub-langs", "pt-BR"]));
+    }
+
+    #[test]
+    fn subtitle_selection_prefers_author_then_portuguese_automatic() {
+        let manual = serde_json::json!({
+            "subtitles": {"en": [{}]},
+            "automatic_captions": {"pt-BR": [{}]}
+        });
+        assert_eq!(
+            select_subtitle(&manual),
+            Some(SubtitleSelection {
+                language: "en".to_owned(),
+                automatic: false,
+            })
+        );
+
+        let automatic = serde_json::json!({
+            "subtitles": {},
+            "automatic_captions": {"en": [{}], "pt-BR": [{}]}
+        });
+        assert_eq!(
+            select_subtitle(&automatic),
+            Some(SubtitleSelection {
+                language: "pt-BR".to_owned(),
+                automatic: true,
+            })
+        );
+    }
+
+    #[test]
+    fn image_cover_hosts_are_restricted() {
+        assert!(supports_image_cover_url(
+            "https://www.tiktok.com/@a/video/1"
+        ));
+        assert!(supports_image_cover_url("https://instagram.com/reel/a"));
+        assert!(!supports_image_cover_url(
+            "https://example.com/instagram.com"
+        ));
     }
 }

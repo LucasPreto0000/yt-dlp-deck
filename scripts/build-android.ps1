@@ -20,15 +20,20 @@ $ndkRoot = if ($env:NDK_HOME) {
     Join-Path $sdkRoot "ndk\27.3.13750724"
 }
 $configuredJdk = $env:JAVA_HOME
-$configuredJavac = if ($configuredJdk) { Join-Path $configuredJdk "bin\javac.exe" } else { $null }
-$jdkRoot = if ($configuredJavac -and (Test-Path -LiteralPath $configuredJavac)) {
+$jdkCandidates = @(
     $configuredJdk
-} else {
     (Get-ChildItem -LiteralPath "C:\Program Files\Eclipse Adoptium" -Directory -ErrorAction SilentlyContinue |
         Where-Object Name -Like "jdk-17*" |
         Sort-Object Name -Descending |
-        Select-Object -First 1).FullName
-}
+        Select-Object -ExpandProperty FullName)
+) | Where-Object { ![string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+$jdkRoot = $jdkCandidates | Where-Object {
+    $java = Join-Path $_ "bin\java.exe"
+    $javac = Join-Path $_ "bin\javac.exe"
+    if (!(Test-Path -LiteralPath $java) -or !(Test-Path -LiteralPath $javac)) { return $false }
+    $versionText = (& $javac -version | Out-String)
+    $versionText -match '^javac 17\.'
+} | Select-Object -First 1
 
 if (!$jdkRoot -or !(Test-Path -LiteralPath (Join-Path $jdkRoot "bin\javac.exe"))) {
     throw "JDK 17 não encontrado. Instale o Temurin 17 antes de compilar."
@@ -183,7 +188,11 @@ try {
     if (!$resolvedJni.StartsWith($resolvedAndroid, [StringComparison]::OrdinalIgnoreCase)) {
         throw "O destino JNI calculado está fora do projeto Android."
     }
-    Copy-Item -LiteralPath $rustLibrary -Destination (Join-Path $resolvedJni "libyt_dlp_deck_lib.so") -Force
+    $jniLibrary = Join-Path $resolvedJni "libyt_dlp_deck_lib.so"
+    $existingJniLibrary = Get-Item -LiteralPath $jniLibrary -Force -ErrorAction SilentlyContinue
+    if (!$existingJniLibrary -or !$existingJniLibrary.LinkType) {
+        Copy-Item -LiteralPath $rustLibrary -Destination $jniLibrary -Force
+    }
 
     Push-Location $androidRoot
     try {

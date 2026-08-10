@@ -29,6 +29,7 @@ import {
   Globe2,
   HardDriveDownload,
   History,
+  ImageDown,
   Info,
   Instagram,
   Link2,
@@ -49,6 +50,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   SquareTerminal,
+  Subtitles,
   Trash2,
   TriangleAlert,
   Twitter,
@@ -89,7 +91,7 @@ const transition = { type: "spring" as const, stiffness: 320, damping: 30 };
 const steps: Array<{ title: string; subtitle: string; icon: LucideIcon }> = [
   { title: "Plataforma", subtitle: "Organize o destino", icon: Globe2 },
   { title: "Conteúdo", subtitle: "Link ou pesquisa", icon: Search },
-  { title: "Formato", subtitle: "Vídeo ou áudio", icon: Film },
+  { title: "Formato", subtitle: "Vídeo, áudio ou extras", icon: Film },
   { title: "Ajustes", subtitle: "Qualidade e acesso", icon: SlidersHorizontal },
   { title: "Finalizar", subtitle: "Revise e baixe", icon: Download },
 ];
@@ -115,7 +117,7 @@ const formats: Array<{
   id: FormatId;
   label: string;
   description: string;
-  category: "Vídeo" | "Áudio";
+  category: "Vídeo" | "Áudio" | "Imagem" | "Legenda";
   icon: LucideIcon;
   color: string;
 }> = [
@@ -127,6 +129,8 @@ const formats: Array<{
   { id: "flac", label: "FLAC", description: "Áudio sem perdas", category: "Áudio", icon: AudioLines, color: "#44dda8" },
   { id: "wav", label: "WAV", description: "Sem compressão", category: "Áudio", icon: FileAudio, color: "#dfe8ff" },
   { id: "m4a", label: "M4A", description: "Eficiente e moderno", category: "Áudio", icon: FileAudio, color: "#9d9cff" },
+  { id: "image", label: "Imagem (capa)", description: "Capa original do vídeo", category: "Imagem", icon: ImageDown, color: "#ff9f68" },
+  { id: "subtitle", label: "Legenda", description: "Do autor ou automática", category: "Legenda", icon: Subtitles, color: "#62e6b6" },
 ];
 
 const qualities: Array<{ id: QualityId; label: string; detail: string }> = [
@@ -166,6 +170,10 @@ const cookieOptions: Array<{
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 const isAudio = (format: FormatId | null) =>
   format === "mp3" || format === "flac" || format === "wav" || format === "m4a";
+const isImage = (format: FormatId | null) => format === "image";
+const isSubtitle = (format: FormatId | null) => format === "subtitle";
+const supportsImageCover = (platform: string | null) =>
+  platform === "TikTok" || platform === "Instagram";
 
 type ToastTone = "info" | "success" | "error";
 type ToolId = "yt-dlp" | "ffmpeg";
@@ -721,7 +729,11 @@ function App() {
   const downloadStageLabel = mobilePaused
     ? "Download pausado"
     : mobileCurrentStatus === "processing"
-      ? "Processando com FFmpeg"
+      ? isImage(format)
+        ? "Preparando imagem"
+        : isSubtitle(format)
+          ? "Preparando legenda"
+          : "Processando com FFmpeg"
       : mobileCurrentStatus === "saving"
         ? "Salvando arquivo"
         : downloading
@@ -1056,6 +1068,9 @@ function App() {
     }
     setPlatform(detected);
     setPlatformFolder(detected === "Outro" ? "Outro" : detected);
+    if (!supportsImageCover(detected)) {
+      setFormat((current) => current === "image" ? null : current);
+    }
     setSourceMode("url");
     setDirectUrl(url);
     setSearchError("");
@@ -1196,6 +1211,9 @@ function App() {
   function choosePlatform(id: string) {
     setPlatform(id);
     setPlatformFolder(id === "Outro" ? "" : id);
+    if (!supportsImageCover(id)) {
+      setFormat((current) => current === "image" ? null : current);
+    }
     if (id !== "YouTube") {
       searchRequestRef.current += 1;
       setSearching(false);
@@ -1310,7 +1328,12 @@ function App() {
     setConsoleAutoScroll(true);
     setConsoleCopied(false);
     const initialLines = isAndroidRuntime
-      ? ["[sistema] Abrindo console Android…", "[sistema] Preparando yt-dlp e FFmpeg incorporados…"]
+      ? [
+          "[sistema] Abrindo console Android…",
+          isImage(format) || isSubtitle(format)
+            ? "[sistema] Preparando o yt-dlp incorporado…"
+            : "[sistema] Preparando yt-dlp e FFmpeg incorporados…",
+        ]
       : [];
     setDownloadLines(initialLines);
     downloadBufferRef.current = initialLines;
@@ -1441,18 +1464,23 @@ function App() {
     if (!format) return "";
     const parts = [
       "yt-dlp",
-      `"${activeUrl}"`,
       isAndroidRuntime
         ? `-o "Downloads/YT-DLP Deck/${platformFolder}/%(title)s [%(id)s].%(ext)s"`
         : `-o "Downloads\\YT-DLP Deck\\${platformFolder}\\%(uploader)s - %(title)s [%(id)s].%(ext)s"`,
       "--no-playlist",
-      "--add-metadata",
-      "--concurrent-fragments 4",
     ];
+    if (!isImage(format) && !isSubtitle(format)) parts.push("--add-metadata", "--concurrent-fragments 4");
     if (cookies === "file" && cookieFile) parts.push(`--cookies "${cookieFile}"`);
     else if (cookies !== "none") parts.push(`--cookies-from-browser ${cookies}`);
     if (isAudio(format)) parts.push(`-x --audio-format ${format} --audio-quality 0`);
-    else parts.push(`-f "${quality}" --merge-output-format ${format === "best" ? "mkv" : format}`);
+    else if (isImage(format)) parts.push("--skip-download --write-thumbnail --ignore-no-formats-error");
+    else if (isSubtitle(format)) {
+      parts.push("--skip-download --write-subs --write-auto-subs");
+      parts.push('--sub-langs "pt-BR,pt,pt.*,en,en.*" --sub-format "vtt/srt/best"');
+    } else {
+      parts.push(`-f "${quality}" --merge-output-format ${format === "best" ? "mkv" : format}`);
+    }
+    parts.push("--", `"${activeUrl}"`);
     return parts.join(" \\\n  ");
   }
 
@@ -1683,14 +1711,22 @@ function App() {
         <PageHeader
           eyebrow="Passo 03 · formato"
           title={<>Escolha como a mídia deve <em>chegar até você.</em></>}
-          description="Vídeo completo ou somente áudio. O FFmpeg cuida da conversão e da melhor combinação de faixas."
+          description="Baixe vídeo, áudio, a capa do post ou a melhor legenda disponível sem sair deste fluxo."
           icon={Film}
         />
         <div className="format-sections">
-          {(["Vídeo", "Áudio"] as const).map((category) => (
+          {(["Vídeo", "Áudio", "Imagem", "Legenda"] as const)
+            .filter((category) => category !== "Imagem" || supportsImageCover(platform))
+            .map((category) => (
             <section key={category}>
               <div className="section-label">
-                {category === "Vídeo" ? <MonitorPlay size={15} /> : <AudioLines size={15} />}
+                {category === "Vídeo"
+                  ? <MonitorPlay size={15} />
+                  : category === "Áudio"
+                    ? <AudioLines size={15} />
+                    : category === "Imagem"
+                      ? <ImageDown size={15} />
+                      : <Subtitles size={15} />}
                 {category}
               </div>
               <div className="card-grid format-grid">
@@ -1722,6 +1758,9 @@ function App() {
 
   function renderSettings() {
     const audio = format ? isAudio(format) : false;
+    const image = isImage(format);
+    const subtitle = isSubtitle(format);
+    const qualityDisabled = audio || image || subtitle;
     return (
       <>
         <PageHeader
@@ -1729,27 +1768,47 @@ function App() {
           title={<>Ajuste qualidade e <em>acesso.</em></>}
           description={
             isAndroidRuntime
-              ? "Escolha a resolução. No Android, o yt-dlp e o FFmpeg já estão incorporados ao aplicativo."
-              : "Escolha a resolução desejada. Para conteúdo restrito, use uma sessão do navegador ou um arquivo cookies.txt."
+              ? "Escolha a resolução quando necessário. Imagens e legendas são extraídas diretamente pelo yt-dlp incorporado."
+              : "Escolha a resolução quando necessário. Para conteúdo restrito, use uma sessão do navegador ou um arquivo cookies.txt."
           }
           icon={Settings2}
         />
         <div className="settings-layout">
-          <section className={`settings-panel ${audio ? "is-disabled" : ""}`}>
+          <section className={`settings-panel ${qualityDisabled ? "is-disabled" : ""}`}>
             <div className="panel-heading">
               <span>
                 <Gauge size={19} />
               </span>
               <div>
-                <strong>Qualidade do vídeo</strong>
-                <small>{audio ? "Não se aplica ao formato de áudio" : "Com fallback automático"}</small>
+                <strong>{qualityDisabled ? "Saída selecionada" : "Qualidade do vídeo"}</strong>
+                <small>
+                  {audio
+                    ? "Não se aplica ao formato de áudio"
+                    : image
+                      ? "A capa será salva na resolução original"
+                      : subtitle
+                        ? "O autor tem prioridade sobre a legenda automática"
+                        : "Com fallback automático"}
+                </small>
               </div>
             </div>
-            {audio ? (
+            {qualityDisabled ? (
               <div className="audio-quality-message">
-                <AudioLines size={28} />
-                <strong>Qualidade máxima de áudio</strong>
-                <small>A conversão usará a melhor faixa disponível.</small>
+                {audio ? <AudioLines size={28} /> : image ? <ImageDown size={28} /> : <Subtitles size={28} />}
+                <strong>
+                  {audio
+                    ? "Qualidade máxima de áudio"
+                    : image
+                      ? "Melhor capa disponível"
+                      : "Melhor legenda disponível"}
+                </strong>
+                <small>
+                  {audio
+                    ? "A conversão usará a melhor faixa disponível."
+                    : image
+                      ? "O arquivo original fornecido pela plataforma será preservado."
+                      : "Se o autor não enviou uma legenda, será usada a automática em português quando disponível."}
+                </small>
               </div>
             ) : (
               <div className="quality-list">
@@ -1952,7 +2011,13 @@ function App() {
                 icon={Film}
                 label="Formato"
                 value={`${selectedFormat?.label || "—"} · ${
-                  isAudio(format) ? "Melhor faixa de áudio" : selectedQuality?.label || "—"
+                  isAudio(format)
+                    ? "Melhor faixa de áudio"
+                    : isImage(format)
+                      ? "Capa original"
+                      : isSubtitle(format)
+                        ? "Autor ou automática em português"
+                        : selectedQuality?.label || "—"
                 }`}
               />
               <ReviewRow icon={Cookie} label="Acesso" value={selectedCookie?.label || "—"} />
@@ -2010,7 +2075,9 @@ function App() {
                     ? "Toque em Retomar para continuar"
                     : downloading
                       ? "Acompanhe o console em tempo real"
-                      : "Executar com yt-dlp + FFmpeg"}
+                      : isImage(format) || isSubtitle(format)
+                        ? "Extrair diretamente com yt-dlp"
+                        : "Executar com yt-dlp + FFmpeg"}
                 </small>
               </span>
             </button>

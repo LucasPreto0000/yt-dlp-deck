@@ -1,5 +1,15 @@
 export type SourceMode = "url" | "search";
-export type FormatId = "mp4" | "mkv" | "webm" | "best" | "mp3" | "flac" | "wav" | "m4a";
+export type FormatId =
+  | "mp4"
+  | "mkv"
+  | "webm"
+  | "best"
+  | "mp3"
+  | "flac"
+  | "wav"
+  | "m4a"
+  | "image"
+  | "subtitle";
 export type QualityId = "best" | "2160p60" | "1440p60" | "1080p60" | "1080p" | "720p" | "480p";
 export type CookieId = "none" | "chrome" | "edge" | "firefox" | "file";
 

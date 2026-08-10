@@ -278,7 +278,7 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
                     activity.getExternalFilesDir(null) ?: activity.filesDir,
                     "download-jobs",
                 ).apply { mkdirs() }
-                ensureInitialStorageAvailable(workRoot)
+                ensureInitialStorageAvailable(workRoot, request.format)
                 val workDir = File(workRoot, id).apply { mkdirs() }
                 val now = System.currentTimeMillis()
                 record = MobileDownloadRecord(
@@ -325,7 +325,11 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
                 record.title = safeName(result.optString("title", "download"))
                 record.status = "processing"
                 record.percent = maxOf(record.percent, 92.0)
-                record.message = "FFmpeg está processando a mídia…"
+                record.message = when (request.format) {
+                    "image" -> "Preparando a imagem de capa…"
+                    "subtitle" -> "Preparando a legenda…"
+                    else -> "FFmpeg está processando a mídia…"
+                }
                 store.save(record)
                 emitRecordState(record)
 
@@ -338,7 +342,11 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
                 val saved = saveToDownloads(converted, platform, progress)
                 record.status = "completed"
                 record.percent = 100.0
-                record.message = "Download concluído com sucesso."
+                record.message = when (request.format) {
+                    "image" -> "Imagem de capa salva com sucesso."
+                    "subtitle" -> "Legenda salva com sucesso."
+                    else -> "Download concluído com sucesso."
+                }
                 record.outputDir = saved.displayLocation
                 record.fileUri = saved.uri.toString()
                 record.fileName = converted.name
@@ -679,7 +687,15 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
 
     private fun validateDownloadRequest(request: DownloadRequestArgs) {
         require(request.url.isNotBlank()) { "Informe uma URL antes de iniciar o download." }
-        validatedHttpUri(request.url)
+        require(request.format in SUPPORTED_FORMATS) { "O formato solicitado não é suportado." }
+        val uri = validatedHttpUri(request.url)
+        if (request.format == "image") {
+            val host = uri.host.orEmpty().lowercase(Locale.ROOT)
+            require(
+                host == "tiktok.com" || host.endsWith(".tiktok.com") ||
+                    host == "instagram.com" || host.endsWith(".instagram.com"),
+            ) { "A extração de imagem de capa está disponível para TikTok e Instagram." }
+        }
         require(request.cookies == "none" || request.cookies == "file") {
             "No Android, use conteúdo público ou importe um arquivo cookies.txt."
         }
@@ -739,11 +755,16 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
         return candidate.absolutePath
     }
 
-    private fun ensureInitialStorageAvailable(path: File) {
+    private fun ensureInitialStorageAvailable(path: File, requestedFormat: String) {
         val storage = activity.getSystemService(StorageManager::class.java)
         val allocatable = storage.getAllocatableBytes(storage.getUuidForPath(path))
-        check(allocatable >= INITIAL_REQUIRED_BYTES) {
-            "Espaço insuficiente. Libere pelo menos ${humanBytes(INITIAL_REQUIRED_BYTES)} e tente novamente."
+        val requiredBytes = if (requestedFormat in AUXILIARY_FORMATS) {
+            AUXILIARY_REQUIRED_BYTES
+        } else {
+            INITIAL_REQUIRED_BYTES
+        }
+        check(allocatable >= requiredBytes) {
+            "Espaço insuficiente. Libere pelo menos ${humanBytes(requiredBytes)} e tente novamente."
         }
     }
 
@@ -783,6 +804,7 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
                 it.optString("acodec", "none") != "none"
         }
         val first = File(inputs.first().getString("path"))
+        if (requestedFormat in AUXILIARY_FORMATS) return first
         val outputExtension = when (requestedFormat) {
             "mp3", "flac", "wav", "m4a", "mp4", "mkv", "webm" -> requestedFormat
             else -> if (video != null && audioOnly != null) "mkv" else first.extension.ifBlank { "mkv" }
@@ -1103,6 +1125,13 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
         "flac" -> "audio/flac"
         "wav" -> "audio/wav"
         "m4a" -> "audio/mp4"
+        "jpg", "jpeg" -> "image/jpeg"
+        "png" -> "image/png"
+        "webp" -> "image/webp"
+        "avif" -> "image/avif"
+        "vtt" -> "text/vtt"
+        "srt" -> "application/x-subrip"
+        "ass", "lrc", "ttml", "srv1", "srv2", "srv3", "json3" -> "text/plain"
         else -> "application/octet-stream"
     }
 
@@ -1122,6 +1151,7 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
         private const val DOWNLOAD_TREE_KEY = "download_tree_uri"
         private const val IMMERSIVE_NAVIGATION_KEY = "immersive_navigation"
         private const val INITIAL_REQUIRED_BYTES = 384L * 1024L * 1024L
+        private const val AUXILIARY_REQUIRED_BYTES = 16L * 1024L * 1024L
         private const val MAX_COOKIE_FILE_BYTES = 10L * 1024L * 1024L
         private const val COPY_BUFFER_BYTES = 1024 * 1024
         private const val QUICKJS_LIBRARY = "libqjs.so"
@@ -1130,6 +1160,10 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
         private const val SEARCH_CACHE_MILLIS = 5L * 60L * 1000L
         private const val MAX_SEARCH_CACHE_ITEMS = 20
         private val AUDIO_FORMATS = setOf("mp3", "flac", "wav", "m4a")
+        private val AUXILIARY_FORMATS = setOf("image", "subtitle")
+        private val SUPPORTED_FORMATS = setOf(
+            "best", "mp4", "mkv", "webm", "mp3", "flac", "wav", "m4a", "image", "subtitle",
+        )
         private val FILE_MANAGER_PACKAGES = listOf(
             "ru.zdevs.zarchiver",
             "me.zhanghai.android.files",

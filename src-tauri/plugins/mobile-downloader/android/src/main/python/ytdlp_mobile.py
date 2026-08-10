@@ -9,6 +9,10 @@ from yt_dlp import YoutubeDL
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _RAW_PROGRESS = re.compile(r"^\[download\]\s+\d+(?:\.\d+)?%")
 _URL = re.compile(r"https?://[^\s]+")
+_IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "avif"}
+_SUBTITLE_EXTENSIONS = {
+    "vtt", "srt", "ass", "lrc", "ttml", "srv1", "srv2", "srv3", "json3"
+}
 
 
 def _redact_url_queries(message):
@@ -156,6 +160,69 @@ def _format_bytes(value):
     return f"{size:.2f} {unit}"
 
 
+def _safe_language(language):
+    return bool(
+        language
+        and language != "live_chat"
+        and len(language) <= 64
+        and re.fullmatch(r"[A-Za-z0-9_-]+", language)
+    )
+
+
+def _language_rank(language):
+    normalized = language.lower().replace("_", "-")
+    if normalized == "pt-br":
+        return (0, normalized)
+    if normalized == "pt":
+        return (1, normalized)
+    if normalized.startswith("pt-"):
+        return (2, normalized)
+    if normalized == "en":
+        return (3, normalized)
+    if normalized.startswith("en-"):
+        return (4, normalized)
+    return (5, normalized)
+
+
+def _best_language(collection):
+    languages = [key for key in (collection or {}) if _safe_language(key)]
+    return min(languages, key=_language_rank) if languages else None
+
+
+def _select_subtitle(info):
+    manual = _best_language(info.get("subtitles"))
+    if manual:
+        return manual, False
+    automatic = _best_language(info.get("automatic_captions"))
+    if automatic:
+        return automatic, True
+    raise RuntimeError(
+        "Este vídeo não possui legendas do autor nem legendas automáticas disponíveis."
+    )
+
+
+def _find_output(work_dir, extensions):
+    candidates = [
+        path
+        for path in glob.glob(os.path.join(work_dir, "*"))
+        if os.path.isfile(path)
+        and os.path.splitext(path)[1].lstrip(".").lower() in extensions
+        and not path.endswith((".part", ".ytdl"))
+    ]
+    return max(candidates, key=os.path.getsize) if candidates else None
+
+
+def _auxiliary_result(info, path):
+    return json.dumps(
+        {
+            "id": str(info.get("id") or ""),
+            "title": info.get("title") or "download",
+            "files": [{"path": path, "vcodec": "none", "acodec": "none"}],
+        },
+        ensure_ascii=False,
+    )
+
+
 def _progress_hook(callback, expected_tracks):
     completed_tracks = 0
     current_format = None
@@ -239,11 +306,11 @@ def download(
     )
     callback.onLog("[sistema] Runtime JavaScript QuickJS incorporado e ativo.")
 
-    probe_options = {
-        **common_options,
-        "format": _selector(media_format, quality),
-        "skip_download": True,
-    }
+    probe_options = {**common_options, "skip_download": True}
+    if media_format in {"image", "subtitle"}:
+        probe_options["ignore_no_formats_error"] = True
+    else:
+        probe_options["format"] = _selector(media_format, quality)
     with YoutubeDL(probe_options) as ydl:
         callback.checkpoint()
         info = ydl.extract_info(url, download=False)
@@ -252,6 +319,54 @@ def download(
         raise RuntimeError(
             "O yt-dlp não conseguiu extrair este vídeo."
         )
+
+    if media_format == "image":
+        callback.onLog("[imagem] Extraindo a melhor imagem de capa disponível…")
+        image_options = {
+            **common_options,
+            "ignore_no_formats_error": True,
+            "outtmpl": os.path.join(work_dir, "%(title).150B [%(id)s].%(ext)s"),
+            "skip_download": True,
+            "writethumbnail": True,
+        }
+        with YoutubeDL(image_options) as ydl:
+            callback.checkpoint()
+            image_info = ydl.extract_info(url, download=True) or info
+        path = _find_output(work_dir, _IMAGE_EXTENSIONS)
+        if not path:
+            raise RuntimeError("O vídeo não possui uma imagem de capa disponível.")
+        callback.onExpectedSize(os.path.getsize(path))
+        callback.onProgress("[download] 88.0% Imagem de capa recebida.")
+        return _auxiliary_result(image_info, path)
+
+    if media_format == "subtitle":
+        language, automatic = _select_subtitle(info)
+        if automatic:
+            callback.onLog(
+                f"[legenda] Nenhuma legenda do autor encontrada; usando legenda "
+                f"automática/traduzida: {language}."
+            )
+        else:
+            callback.onLog(f"[legenda] Legenda do autor selecionada: {language}.")
+        subtitle_options = {
+            **common_options,
+            "ignore_no_formats_error": True,
+            "outtmpl": os.path.join(work_dir, "%(title).150B [%(id)s].%(ext)s"),
+            "skip_download": True,
+            "subtitlesformat": "vtt/srt/best",
+            "subtitleslangs": [language],
+            "writeautomaticsub": automatic,
+            "writesubtitles": not automatic,
+        }
+        with YoutubeDL(subtitle_options) as ydl:
+            callback.checkpoint()
+            subtitle_info = ydl.extract_info(url, download=True) or info
+        path = _find_output(work_dir, _SUBTITLE_EXTENSIONS)
+        if not path:
+            raise RuntimeError("O yt-dlp não conseguiu salvar a legenda selecionada.")
+        callback.onExpectedSize(os.path.getsize(path))
+        callback.onProgress("[download] 88.0% Legenda recebida.")
+        return _auxiliary_result(subtitle_info, path)
 
     requested_formats = info.get("requested_formats") or [info]
     selected_tracks = [
