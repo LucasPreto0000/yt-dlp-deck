@@ -38,6 +38,7 @@ import com.arthenica.ffmpegkit.FFmpegKit
 import com.arthenica.ffmpegkit.ReturnCode
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
+import dalvik.system.BaseDexClassLoader
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -766,9 +767,17 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
     }
 
     private fun quickJsPath(): String {
-        val candidate = File(activity.applicationInfo.nativeLibraryDir, QUICKJS_LIBRARY)
-        check(candidate.isFile) {
-            "O runtime JavaScript QuickJS incorporado não foi encontrado."
+        val candidates = linkedSetOf<File>()
+        (activity.classLoader as? BaseDexClassLoader)
+            ?.findLibrary(QUICKJS_LIBRARY.removePrefix("lib").removeSuffix(".so"))
+            ?.let { candidates += File(it) }
+        activity.applicationInfo.nativeLibraryDir
+            ?.let { candidates += File(it, QUICKJS_LIBRARY) }
+        val candidate = candidates.firstOrNull { it.isFile }
+        checkNotNull(candidate) {
+            val inspected = candidates.joinToString { it.absolutePath }
+            "O runtime JavaScript QuickJS está no APK, mas o Android não o extraiu. " +
+                "Reinstale esta versão do aplicativo. Caminhos verificados: $inspected"
         }
         return candidate.absolutePath
     }
@@ -904,7 +913,7 @@ class MobileDownloaderPlugin(private val activity: Activity) : Plugin(activity) 
 
     private fun audioArguments(input: File, output: File, format: String): List<String> {
         val codec = when (format) {
-            "mp3" -> listOf("-c:a", "libmp3lame", "-q:a", "0")
+            "mp3" -> listOf("-c:a", "libmp3lame", "-b:a", "320k")
             "flac" -> listOf("-c:a", "flac")
             "wav" -> listOf("-c:a", "pcm_s16le")
             else -> listOf("-c:a", "aac", "-b:a", "256k")

@@ -1,6 +1,7 @@
 /node_modules
 /dist
 /public/visual-core.wasm
+/android-rust/target/
 /src-tauri/target
 /src-tauri/gen
 /src-tauri/plugins/mobile-downloader/android/src/main/jniLibs/
@@ -17,6 +18,8 @@ signing.properties
 /*.zip
 
 # Downloads e arquivos pessoais
+/arquivos-locais/
+/Abrir YT-DLP Deck.lnk
 /Downloads/
 /cookie.txt
 /historico_downloads.txt

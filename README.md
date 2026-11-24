@@ -7,9 +7,9 @@ FEITO INTEIRAMENTE POR IA, ENTAO TERÁ BUGS!!!!
 
 ## Downloads oficiais
 
-- [Baixar para Windows (`yt-dlp-deck.exe`)](https://github.com/LucasPreto0000/yt-dlp-deck/releases/download/v1.1.14/yt-dlp-deck.exe)
-- [Baixar para Android ARM64 (`.apk`)](https://github.com/LucasPreto0000/yt-dlp-deck/releases/download/v1.1.14/YT-DLP-Deck-Android-v1.1.14-arm64.apk)
-- [Ver a release completa e as notas da versão](https://github.com/LucasPreto0000/yt-dlp-deck/releases/tag/v1.1.14)
+- [Baixar para Windows (`yt-dlp-deck.exe`)](https://github.com/LucasPreto0000/yt-dlp-deck/releases/download/v1.1.16/yt-dlp-deck.exe)
+- [Baixar para Android ARM64 (`.apk`)](https://github.com/LucasPreto0000/yt-dlp-deck/releases/download/v1.1.16/YT-DLP-Deck-Android-v1.1.16-arm64.apk)
+- [Ver a release completa e as notas da versão](https://github.com/LucasPreto0000/yt-dlp-deck/releases/tag/v1.1.16)
 
 O APK é compatível com Android 13 ou superior em aparelhos ARM64. No Android,
 pode ser necessário permitir a instalação de aplicativos desconhecidos.
@@ -48,16 +48,30 @@ Os arquivos baixados ficam em:
 
 ## Desenvolvimento
 
+Consulte [a organização das pastas](docs/ESTRUTURA.md) para localizar o código,
+os arquivos pessoais e os atalhos do aplicativo e dos instaladores.
+
 ```powershell
 npm install
 npm run desktop:dev
 ```
 
-Para gerar novamente o `.exe` e o instalador:
+Para gerar apenas o `.exe`:
+
+```powershell
+npm run desktop:exe
+```
+
+Para gerar o `.exe` e o instalador:
 
 ```powershell
 npm run desktop:build
 ```
+
+Builds repetidos reutilizam o frontend e os artefatos Rust quando os arquivos de
+entrada não mudaram. Para forçar o frontend completo, use `npm run build:full`.
+Mantenha `src-tauri/target` para aproveitar a compilação incremental; após uma
+limpeza dessa pasta, a primeira compilação volta a ser mais demorada.
 
 ### Android
 
@@ -92,7 +106,7 @@ npm run android:build
 
 O resultado fica em:
 
-`src-tauri\target\android\YT-DLP-Deck-Android-v1.1.14-arm64.apk`
+`src-tauri\target\android\YT-DLP-Deck-Android-v1.1.22-arm64.apk`
 
 Para gerar um Android App Bundle:
 
@@ -102,13 +116,17 @@ npm run android:bundle
 
 O AAB fica em:
 
-`src-tauri\target\android\YT-DLP-Deck-Android-v1.1.14-arm64.aab`
+`src-tauri\target\android\YT-DLP-Deck-Android-v1.1.22-arm64.aab`
 
 Requisitos de compilação: JDK 17, Android SDK 36, Build Tools, NDK
 27.3.13750724 e os targets Rust do Android. O script também contorna o bloqueio
 de links simbólicos do Windows, compila o QuickJS para ARM64 e assina o APK com
 uma chave local persistente de release, criada fora do repositório. Para a
 Google Play, configure uma chave de produção.
+
+O script Android preserva os intermediários do Gradle e os pacotes Python para
+acelerar builds seguintes. Se o cache Android ficar corrompido ou inacessível,
+execute `npm run android:build -- -RepairCache` para reconstruí-lo.
 
 Nunca salve a chave ou as senhas no repositório. O script usa estas variáveis
 quando todas estiverem definidas:
@@ -123,14 +141,33 @@ npm run android:bundle
 
 O código nativo desktop está em `src-tauri\src\lib.rs`. O motor Android está em
 `src-tauri\plugins\mobile-downloader`, com Kotlin, Python/yt-dlp e FFmpegKit. A
-interface React/TypeScript está em `src\App.tsx`, com o design system em
-`src\styles.css`.
+interface React/TypeScript é coordenada por `src\App.tsx`, com componentes em
+`src\components`, recursos em `src\features` e opções em `src\config`.
+O design system está em `src\styles`, importado por `src\styles.css`.
+As regras puras de download ficam em `src-tauri\src\download`.
+Consulte o [mapa da arquitetura](docs/ARCHITECTURE.md) para localizar cada recurso
+e os comandos de validação rápida.
 
 O background gráfico usa WebGPU/WGSL, com fallback WebGL2/GLSL em
 `src\visuals\gpuBackdrop.ts`. Os parâmetros da animação são calculados pelo módulo
-WebAssembly escrito em AssemblyScript em `assembly\visual-core.ts`.
+WebAssembly escrito em Rust em `visual-core\lib.rs`. Para compilar em uma
+máquina nova, instale o alvo com `rustup target add wasm32-unknown-unknown`.
 
-## Cursores
+## Importação Spotify e qualidade de áudio (Windows)
+
+Na plataforma Spotify, cole um link `https://open.spotify.com/track/...` e use
+“Importar faixa e buscar no YouTube”. O Spotify fornece apenas o título via
+[oEmbed](https://developer.spotify.com/documentation/embeds/reference/oembed).
+Escolha e confira a prévia de um resultado no YouTube antes de continuar; ajuste
+o nome/artista na pesquisa se necessário. Não é download do áudio do Spotify,
+não requer conta Premium e não contorna DRM. Álbuns e playlists não são importados.
+Baixe apenas conteúdo para o qual você tenha autorização.
+
+Os perfis Windows de áudio selecionam `bestaudio/best`. MP3 usa 320 kbps;
+FLAC evita novas perdas na conversão, sem upsampling ou alteração forçada de
+canais. Converter uma fonte com perdas em FLAC não recupera informação perdida.
+
+## Cursores incluídos
 
 O aplicativo inclui o conjunto escuro “Windows 11 Cursors Concept”, criado por
 [Jepri Creations](https://www.deviantart.com/jepricreations). Os arquivos e a

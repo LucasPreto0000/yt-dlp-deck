@@ -1,20 +1,26 @@
 {
   "name": "yt-dlp-deck",
   "private": true,
-  "version": "1.1.14",
+  "version": "1.1.26",
   "description": "Interface desktop para yt-dlp, construída com Tauri e Rust",
   "scripts": {
+    "check": "tsc --noEmit",
+    "test:frontend": "node --test tests/frontend-utils.test.mjs",
+    "test:rust": "cargo test --release --lib --manifest-path src-tauri/Cargo.toml",
     "tauri": "tauri",
     "predev": "npm run build:wasm",
     "dev": "vite",
-    "build:wasm": "asc assembly/visual-core.ts --outFile public/visual-core.wasm --optimize --runtime stub",
-    "build": "npm run build:wasm && tsc && vite build",
+    "build:wasm": "rustc --edition=2024 --target wasm32-unknown-unknown --crate-type cdylib -C opt-level=z -C panic=abort -C strip=symbols visual-core/lib.rs -o public/visual-core.wasm",
+    "build": "node scripts/build-frontend.mjs",
+    "build:frontend": "npm run build:wasm && tsc && vite build",
+    "build:full": "node scripts/build-frontend.mjs --force",
     "desktop:dev": "tauri dev",
-    "desktop:build": "tauri build",
+    "desktop:exe": "node scripts/build-artifact.mjs desktop:exe",
+    "desktop:build": "node scripts/build-artifact.mjs desktop:build",
     "android:init": "tauri android init",
     "android:dev": "tauri android dev",
-    "android:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android.ps1",
-    "android:bundle": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android.ps1 -Bundle"
+    "android:build": "node scripts/build-artifact.mjs android:build",
+    "android:bundle": "node scripts/build-artifact.mjs android:bundle"
   },
   "dependencies": {
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
@@ -32,7 +38,6 @@
     "@types/react-dom": "^19.1.7",
     "@vitejs/plugin-react": "^4.3.4",
     "@webgpu/types": "^0.1.64",
-    "assemblyscript": "^0.28.8",
     "typescript": "^5.7.2",
     "vite": "^6.0.7"
   }

@@ -1,0 +1,194 @@
+/* Escala tipográfica ampliada para leitura confortável em telas desktop */
+.brand strong {
+  font-size: 16px;
+}
+
+.brand small,
+.top-center,
+.tool-badge {
+  font-size: 11px;
+}
+
+.sidebar-title,
+.sidebar-progress > div:first-child {
+  font-size: 11px;
+}
+
+.sidebar nav strong {
+  font-size: 14px;
+}
+
+.sidebar nav small {
+  font-size: 11px;
+}
+
+.sidebar-progress > small {
+  font-size: 10px;
+}
+
+.eyebrow {
+  font-size: 11px;
+}
+
+.page-header h1 {
+  font-size: clamp(36px, 3.7vw, 52px);
+}
+
+.page-header p {
+  max-width: 760px;
+  font-size: 16px;
+}
+
+.choice-copy strong {
+  font-size: 15px;
+}
+
+.choice-copy small {
+  font-size: 12px;
+}
+
+.choice-tag,
+.field-panel label,
+.cookie-file label,
+.preview-label,
+.section-label {
+  font-size: 10px;
+}
+
+input {
+  font-size: 14px;
+}
+
+.source-tabs button,
+.soft-button,
+.primary-button,
+.back-button,
+.next-button,
+.folder-button,
+.retry-button {
+  font-size: 12px;
+}
+
+.media-title {
+  font-size: 13px;
+}
+
+.media-card.is-large .media-title {
+  font-size: 19px;
+}
+
+.media-meta,
+.duration-badge,
+.selected-chip {
+  font-size: 10px;
+}
+
+.empty-state strong,
+.panel-heading strong {
+  font-size: 13px;
+}
+
+.empty-state small,
+.panel-heading small {
+  font-size: 11px;
+}
+
+.quality-list strong,
+.cookie-grid strong {
+  font-size: 11px;
+}
+
+.quality-list small,
+.cookie-grid small {
+  font-size: 9px;
+}
+
+.review-row small {
+  font-size: 9px;
+}
+
+.review-row strong {
+  font-size: 11px;
+}
+
+.terminal-head,
+.progress-caption,
+.success-message {
+  font-size: 10px;
+}
+
+.terminal-panel pre,
+.live-console {
+  font-size: 10px;
+}
+
+.download-button strong {
+  font-size: 13px;
+}
+
+.download-button small,
+.transport-hint {
+  font-size: 10px;
+}
+
+/* Escala tipográfica legível para telas desktop e notebooks. */
+small {
+  font-size: 12px !important;
+  line-height: 1.45;
+}
+
+input {
+  font-size: 14px;
+}
+
+.tool-badge,
+.top-center,
+.sidebar-title,
+.sidebar-progress,
+.renderer-label,
+.eyebrow,
+.choice-tag,
+.field-panel label,
+.cookie-file label,
+.source-tabs button,
+.soft-button,
+.primary-button,
+.back-button,
+.next-button,
+.folder-button,
+.retry-button,
+.preview-label,
+.duration-badge,
+.video-preview-head span,
+.video-preview-footer,
+.media-meta,
+.selected-chip,
+.section-label,
+.terminal-head,
+.transport-hint,
+.inline-error {
+  font-size: 12px;
+}
+
+.sidebar nav button strong,
+.choice-copy strong,
+.media-title,
+.empty-state strong,
+.panel-heading strong,
+.quality-list strong,
+.cookie-grid strong,
+.review-row strong,
+.download-button strong {
+  font-size: 14px;
+}
+
+.page-header p,
+.audio-quality-message strong,
+.success-message {
+  font-size: 13px;
+}
+
+.terminal-panel pre,
+.live-console {
+  font-size: 11px;
+}

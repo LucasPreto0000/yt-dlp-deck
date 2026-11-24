@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import {
   Activity,
@@ -9,53 +9,34 @@ import {
   Check,
   CheckCheck,
   CheckCircle2,
-  Chrome,
   CirclePause,
   CirclePlay,
   Clipboard,
-  Clock3,
-  Compass,
   Copy,
   Cookie,
-  Disc3,
   Download,
-  ExternalLink,
-  FileAudio,
   FileText,
   Film,
-  Flame,
   FolderOpen,
   Gauge,
   Globe2,
   HardDriveDownload,
   History,
   ImageDown,
-  Info,
   Instagram,
   Link2,
-  ListVideo,
   LoaderCircle,
-  LucideIcon,
-  MessageCircle,
   MonitorPlay,
-  Music2,
   Pause,
   Play,
-  Radio,
   RotateCcw,
   Search,
   Settings2,
   Share2,
-  ShieldCheck,
-  SlidersHorizontal,
-  Sparkles,
   SquareTerminal,
   Subtitles,
   Trash2,
   TriangleAlert,
-  Twitter,
-  UserRound,
-  Video,
   WandSparkles,
   Wifi,
   X,
@@ -86,556 +67,18 @@ import {
 } from "./nativeBridge";
 import { startGpuBackdrop, type BackdropController } from "./visuals/gpuBackdrop";
 
-const transition = { type: "spring" as const, stiffness: 320, damping: 30 };
-
-const steps: Array<{ title: string; subtitle: string; icon: LucideIcon }> = [
-  { title: "Plataforma", subtitle: "Organize o destino", icon: Globe2 },
-  { title: "Conteúdo", subtitle: "Link ou pesquisa", icon: Search },
-  { title: "Formato", subtitle: "Vídeo, áudio ou extras", icon: Film },
-  { title: "Ajustes", subtitle: "Qualidade e acesso", icon: SlidersHorizontal },
-  { title: "Finalizar", subtitle: "Revise e baixe", icon: Download },
-];
-
-const platforms: Array<{
-  id: string;
-  label: string;
-  description: string;
-  icon: LucideIcon;
-  color: string;
-  urlExample: string;
-}> = [
-  { id: "YouTube", label: "YouTube", description: "Vídeos, Shorts e lives", icon: Youtube, color: "#ff4164", urlExample: "https://www.youtube.com/watch?v=..." },
-  { id: "TikTok", label: "TikTok", description: "Vídeos e tendências", icon: Music2, color: "#46edf2", urlExample: "https://www.tiktok.com/@usuario/video/..." },
-  { id: "Instagram", label: "Instagram", description: "Reels e publicações", icon: Instagram, color: "#f765a3", urlExample: "https://www.instagram.com/reel/..." },
-  { id: "X_Twitter", label: "X / Twitter", description: "Vídeos e clipes", icon: Twitter, color: "#60baff", urlExample: "https://x.com/usuario/status/..." },
-  { id: "Twitch", label: "Twitch", description: "Clipes e transmissões", icon: Radio, color: "#a978ff", urlExample: "https://www.twitch.tv/videos/..." },
-  { id: "Reddit", label: "Reddit", description: "Mídias de comunidades", icon: MessageCircle, color: "#ff7045", urlExample: "https://www.reddit.com/r/comunidade/comments/..." },
-  { id: "Outro", label: "Outro site", description: "Qualquer site compatível", icon: Globe2, color: "#aab2d1", urlExample: "https://exemplo.com/video" },
-];
-
-const formats: Array<{
-  id: FormatId;
-  label: string;
-  description: string;
-  category: "Vídeo" | "Áudio" | "Imagem" | "Legenda";
-  icon: LucideIcon;
-  color: string;
-}> = [
-  { id: "mp4", label: "MP4", description: "Compatibilidade máxima", category: "Vídeo", icon: Video, color: "#62a8ff" },
-  { id: "mkv", label: "MKV", description: "Todos os codecs", category: "Vídeo", icon: Disc3, color: "#a97aff" },
-  { id: "webm", label: "WEBM", description: "Formato web moderno", category: "Vídeo", icon: Globe2, color: "#43d9ff" },
-  { id: "best", label: "Melhor", description: "Qualidade sem limites", category: "Vídeo", icon: Sparkles, color: "#ffbd58" },
-  { id: "mp3", label: "MP3", description: "Universal e compacto", category: "Áudio", icon: Music2, color: "#ff6e9a" },
-  { id: "flac", label: "FLAC", description: "Áudio sem perdas", category: "Áudio", icon: AudioLines, color: "#44dda8" },
-  { id: "wav", label: "WAV", description: "Sem compressão", category: "Áudio", icon: FileAudio, color: "#dfe8ff" },
-  { id: "m4a", label: "M4A", description: "Eficiente e moderno", category: "Áudio", icon: FileAudio, color: "#9d9cff" },
-  { id: "image", label: "Imagem (capa)", description: "Capa original do vídeo", category: "Imagem", icon: ImageDown, color: "#ff9f68" },
-  { id: "subtitle", label: "Legenda junto", description: "Ative junto com vídeo ou áudio", category: "Legenda", icon: Subtitles, color: "#62e6b6" },
-];
-
-const qualities: Array<{ id: QualityId; label: string; detail: string }> = [
-  { id: "best", label: "Melhor disponível", detail: "Sem limite" },
-  { id: "2160p60", label: "4K · 60 FPS", detail: "2160p" },
-  { id: "1440p60", label: "2K · 60 FPS", detail: "1440p" },
-  { id: "1080p60", label: "Full HD · 60 FPS", detail: "1080p" },
-  { id: "1080p", label: "Full HD", detail: "1080p" },
-  { id: "720p", label: "HD", detail: "720p" },
-  { id: "480p", label: "Compacto", detail: "480p" },
-];
-
-const mobileStatusLabels: Record<string, string> = {
-  queued: "Na fila",
-  running: "Baixando",
-  paused: "Pausado",
-  processing: "Processando",
-  saving: "Salvando",
-  completed: "Concluído",
-  failed: "Falhou",
-  cancelled: "Cancelado",
-};
-
-const cookieOptions: Array<{
-  id: CookieId;
-  label: string;
-  detail: string;
-  icon: LucideIcon;
-}> = [
-  { id: "none", label: "Sem cookies", detail: "Conteúdo público", icon: ShieldCheck },
-  { id: "chrome", label: "Chrome", detail: "Sessão do navegador", icon: Chrome },
-  { id: "edge", label: "Edge", detail: "Sessão do navegador", icon: Compass },
-  { id: "firefox", label: "Firefox", detail: "Sessão do navegador", icon: Flame },
-  { id: "file", label: "Arquivo", detail: "cookies.txt", icon: FileText },
-];
-
-const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
-const isAudio = (format: FormatId | null) =>
-  format === "mp3" || format === "flac" || format === "wav" || format === "m4a";
-const isImage = (format: FormatId | null) => format === "image";
-const supportsImageCover = (platform: string | null) =>
-  platform === "TikTok" || platform === "Instagram";
-
-type ToastTone = "info" | "success" | "error";
-type ToolId = "yt-dlp" | "ffmpeg";
-const TOOL_UPDATE_CACHE_MS = 60_000;
-
-interface ToastItem {
-  id: number;
-  tone: ToastTone;
-  title: string;
-  message: string;
-}
-
-interface DesktopHistoryRecord {
-  id: string;
-  title: string;
-  url: string;
-  status: "completed" | "failed";
-  percent: number;
-  message: string;
-  outputDir: string;
-  createdAt: number;
-}
-
-type HistoryRecord = Pick<
-  MobileDownloadRecord,
-  "id" | "title" | "url" | "status" | "percent" | "message" | "outputDir" | "createdAt"
-> & {
-  fileUri?: string | null;
-};
-
-type DownloadVisualStatus =
-  | "idle"
-  | "queued"
-  | "running"
-  | "paused"
-  | "processing"
-  | "saving"
-  | "completed"
-  | "failed"
-  | "cancelled";
-
-interface DownloadTelemetry {
-  size: string;
-  speed: string;
-  eta: string;
-}
-
-function getConsoleLineTone(line: string) {
-  const normalized = line.toLowerCase();
-  if (normalized.includes("error") || normalized.includes("erro:") || normalized.includes("failed")) {
-    return "error";
-  }
-  if (normalized.includes("warning") || normalized.includes("aviso")) return "warning";
-  if (normalized.includes("[download]") || normalized.includes("%")) return "progress";
-  if (
-    normalized.includes("[info]") ||
-    normalized.includes("[sistema]") ||
-    normalized.includes("destination")
-  ) {
-    return "info";
-  }
-  return "default";
-}
-
-function readDownloadTelemetry(lines: string[]): DownloadTelemetry {
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index];
-    if (!line.includes("[download]")) continue;
-    const size = line.match(/\bof\s+~?([0-9.]+\s*[KMGT]i?B)/i)?.[1] || "Calculando";
-    const speed = line.match(/\bat\s+([0-9.]+\s*[KMGT]i?B\/s)/i)?.[1] || "Calculando";
-    const eta = line.match(/\bETA\s+([0-9:]+)/i)?.[1] || "—";
-    return { size, speed, eta };
-  }
-  return { size: "Calculando", speed: "Calculando", eta: "—" };
-}
-
-function historyDateLabel(timestamp: number) {
-  const current = new Date();
-  const date = new Date(timestamp);
-  const currentDay = new Date(current.getFullYear(), current.getMonth(), current.getDate()).getTime();
-  const recordDay = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-  const dayDifference = Math.round((currentDay - recordDay) / 86_400_000);
-  if (dayDifference === 0) return "Hoje";
-  if (dayDifference === 1) return "Ontem";
-  return new Intl.DateTimeFormat("pt-BR", {
-    day: "2-digit",
-    month: "long",
-    year: date.getFullYear() === current.getFullYear() ? undefined : "numeric",
-  }).format(date);
-}
-
-function groupHistory(items: HistoryRecord[]) {
-  const groups = new Map<string, HistoryRecord[]>();
-  items.forEach((item) => {
-    const label = historyDateLabel(item.createdAt);
-    groups.set(label, [...(groups.get(label) || []), item]);
-  });
-  return Array.from(groups, ([label, records]) => ({ label, records }));
-}
-
-function ToastViewport({ items }: { items: ToastItem[] }) {
-  return (
-    <div className="toast-viewport" aria-live="polite" aria-atomic="false">
-      <AnimatePresence initial={false}>
-        {items.map((item) => {
-          const Icon = item.tone === "success"
-            ? CheckCircle2
-            : item.tone === "error"
-              ? TriangleAlert
-              : Info;
-          return (
-            <motion.div
-              className={`toast-card is-${item.tone}`}
-              key={item.id}
-              initial={{ opacity: 0, x: 32, scale: 0.96 }}
-              animate={{ opacity: 1, x: 0, scale: 1 }}
-              exit={{ opacity: 0, x: 24, scale: 0.97 }}
-              transition={transition}
-              role={item.tone === "error" ? "alert" : "status"}
-            >
-              <span className="toast-icon">
-                <Icon size={18} />
-              </span>
-              <span className="toast-copy">
-                <strong>{item.title}</strong>
-                <small>{item.message}</small>
-              </span>
-              <span className="toast-timer" />
-            </motion.div>
-          );
-        })}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-function ToolBadge({
-  tool,
-  label,
-  ready,
-  version,
-  checking,
-  recentlyUpdated,
-  disabled,
-  onUpdate,
-}: {
-  tool: ToolId;
-  label: string;
-  ready: boolean;
-  version?: string;
-  checking: boolean;
-  recentlyUpdated: boolean;
-  disabled: boolean;
-  onUpdate: (tool: ToolId) => void;
-}) {
-  const action = isAndroidRuntime
-    ? "Ver informações de atualização"
-    : "Procurar atualização silenciosamente";
-  return (
-    <button
-      type="button"
-      className={`tool-badge ${ready ? "is-ready" : ""} ${checking ? "is-checking" : ""} ${recentlyUpdated ? "is-updated" : ""}`}
-      title={checking
-        ? `Procurando atualização do ${label}`
-        : ready
-          ? `${version ? `${version} · ` : ""}${action}`
-          : `${label} não encontrado`}
-      aria-label={`${label} ${ready ? "instalado" : "não encontrado"}. ${action}`}
-      aria-busy={checking}
-      aria-disabled={!ready || disabled}
-      disabled={!ready || disabled}
-      onClick={() => {
-        if (!checking && !disabled) onUpdate(tool);
-      }}
-    >
-      <span className="tool-light" />
-      <span>{label}</span>
-      <span className="tool-badge-icons" aria-hidden="true">
-        {checking ? (
-          <LoaderCircle className="spin" size={12} />
-        ) : ready ? (
-          isAndroidRuntime ? (
-            <Info className="tool-info-icon" size={12} />
-          ) : (
-            <>
-              <Check className="tool-ready-icon" size={12} />
-              <RotateCcw className="tool-update-icon" size={12} />
-            </>
-          )
-        ) : null}
-      </span>
-    </button>
-  );
-}
-
-const ChoiceCard = memo(function ChoiceCard({
-  active,
-  icon: Icon,
-  color,
-  title,
-  description,
-  tag,
-  onClick,
-  onDoubleClick,
-}: {
-  active: boolean;
-  icon: LucideIcon;
-  color: string;
-  title: string;
-  description: string;
-  tag?: string;
-  onClick: () => void;
-  onDoubleClick?: () => void;
-}) {
-  return (
-    <motion.button
-      type="button"
-      className={`choice-card ${active ? "is-active" : ""}`}
-      style={{ "--card-color": color } as React.CSSProperties}
-      onClick={onClick}
-      onDoubleClick={onDoubleClick}
-      whileHover={{ y: -6 }}
-      whileTap={{ scale: 0.98 }}
-    >
-      <span className="choice-glow" />
-      <span className="choice-icon">
-        <Icon size={24} />
-      </span>
-      {tag && <span className="choice-tag">{tag}</span>}
-      <span className="choice-copy">
-        <strong>{title}</strong>
-        <small>{description}</small>
-      </span>
-      <motion.span
-        className="choice-check"
-        initial={false}
-        animate={{ scale: active ? 1 : 0, opacity: active ? 1 : 0 }}
-        transition={transition}
-      >
-        <Check size={14} />
-      </motion.span>
-    </motion.button>
-  );
-});
-
-const MediaCard = memo(function MediaCard({
-  media,
-  selected,
-  onClick,
-  onDoubleClick,
-  onPreview,
-  large = false,
-}: {
-  media: SearchResult;
-  selected: boolean;
-  onClick?: () => void;
-  onDoubleClick?: () => void;
-  onPreview?: (trigger: HTMLButtonElement) => void;
-  large?: boolean;
-}) {
-  const uploader = "Resultado da pesquisa";
-  return (
-    <motion.article
-      className={`media-card ${selected ? "is-selected" : ""} ${large ? "is-large" : ""}`}
-      whileHover={onClick ? { y: -6 } : undefined}
-    >
-      {onClick && (
-        <button
-          type="button"
-          className="media-select-hitbox"
-          onClick={onClick}
-          onDoubleClick={onDoubleClick}
-          aria-label={`Selecionar ${media.title}`}
-          aria-pressed={selected}
-        >
-          <span className="sr-only">Selecionar {media.title}</span>
-        </button>
-      )}
-      <div className="media-cover">
-        {media.thumbnail ? (
-          <img
-            src={media.thumbnail}
-            alt={`Capa de ${media.title}`}
-            loading="lazy"
-            decoding="async"
-          />
-        ) : (
-          <div className="cover-fallback">
-            <Film size={34} />
-          </div>
-        )}
-        <div className="cover-shade" />
-        <span className="duration-badge">
-          <Clock3 size={12} /> {media.duration || "—"}
-        </span>
-        {onPreview && (
-          <button
-            type="button"
-            className="play-orbit"
-            aria-label={`Reproduzir prévia de ${media.title}`}
-            title="Reproduzir prévia"
-            onClick={(event) => {
-              event.stopPropagation();
-              onPreview(event.currentTarget);
-            }}
-          >
-            <Play size={18} fill="currentColor" />
-          </button>
-        )}
-      </div>
-      <div className="media-content">
-        <div className="media-title">{media.title}</div>
-        <div className="media-meta">
-          <UserRound size={12} />
-          <span>{uploader}</span>
-        </div>
-      </div>
-      <AnimatePresence>
-        {selected && (
-          <motion.span
-            className="selected-chip"
-            initial={{ opacity: 0, scale: 0.7, y: -6 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.7 }}
-          >
-            <CheckCircle2 size={14} /> Selecionado
-          </motion.span>
-        )}
-      </AnimatePresence>
-    </motion.article>
-  );
-});
-
-function getYouTubeEmbedUrl(media: SearchResult) {
-  let videoId = media.id.trim();
-  if (!/^[\w-]{11}$/.test(videoId)) {
-    try {
-      const parsed = new URL(media.url);
-      videoId = parsed.hostname.includes("youtu.be")
-        ? parsed.pathname.slice(1)
-        : parsed.searchParams.get("v") || "";
-    } catch {
-      videoId = "";
-    }
-  }
-  if (!videoId) return "";
-  return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?autoplay=1&rel=0&modestbranding=1`;
-}
-
-function VideoPreview({
-  media,
-  onClose,
-  onOpenExternal,
-}: {
-  media: SearchResult;
-  onClose: () => void;
-  onOpenExternal: () => void;
-}) {
-  const embedUrl = getYouTubeEmbedUrl(media);
-  const dialogRef = useRef<HTMLElement>(null);
-  const closeButtonRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    const background = document.querySelectorAll<HTMLElement>(".topbar, .sidebar, .main-stage");
-    background.forEach((element) => element.setAttribute("inert", ""));
-    closeButtonRef.current?.focus();
-
-    const keepFocusInside = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onClose();
-        return;
-      }
-      if (event.key !== "Tab" || !dialogRef.current) return;
-      const focusable = Array.from(
-        dialogRef.current.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), iframe, [href], [tabindex]:not([tabindex="-1"])',
-        ),
-      );
-      if (!focusable.length) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-
-    window.addEventListener("keydown", keepFocusInside);
-    return () => {
-      window.removeEventListener("keydown", keepFocusInside);
-      background.forEach((element) => element.removeAttribute("inert"));
-    };
-  }, [onClose]);
-
-  return (
-    <motion.div
-      className="video-preview-backdrop"
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      onClick={onClose}
-    >
-      <motion.section
-        ref={dialogRef}
-        className="video-preview-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Prévia de ${media.title}`}
-        initial={{ opacity: 0, y: 24, scale: 0.96 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={{ opacity: 0, y: 18, scale: 0.97 }}
-        transition={transition}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <header className="video-preview-head">
-          <div>
-            <span><MonitorPlay size={15} /> Prévia do vídeo</span>
-            <strong>{media.title}</strong>
-          </div>
-          <button
-            ref={closeButtonRef}
-            type="button"
-            onClick={onClose}
-            aria-label="Fechar prévia"
-            title="Fechar"
-          >
-            <X size={20} />
-          </button>
-        </header>
-        <div className="video-preview-frame">
-          {embedUrl ? (
-            <iframe
-              key={embedUrl}
-              src={embedUrl}
-              title={`Prévia de ${media.title}`}
-              allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
-              allowFullScreen
-              referrerPolicy="strict-origin-when-cross-origin"
-            />
-          ) : (
-            <div className="video-preview-unavailable">
-              <AlertCircle size={26} />
-              <strong>Não foi possível montar a prévia deste vídeo.</strong>
-            </div>
-          )}
-        </div>
-        <footer className="video-preview-footer">
-          <div>
-            <span><CheckCircle2 size={15} /> Este vídeo já está selecionado para download</span>
-            <small>Se a prévia não carregar, abra o vídeo diretamente no YouTube.</small>
-          </div>
-          <button type="button" onClick={onOpenExternal}>
-            <ExternalLink size={15} /> Abrir no YouTube
-          </button>
-        </footer>
-      </motion.section>
-    </motion.div>
-  );
-}
+import { transition } from "./config/motion";
+import { steps, platforms, formats, qualities, mobileStatusLabels, cookieOptions } from "./config/downloadOptions";
+import { errorText, isAudio, isImage, supportsImageCover } from "./features/downloads/formatUtils";
+import { TOOL_UPDATE_CACHE_MS, type ToolId, type ToastTone, type ToastItem, type DesktopHistoryRecord, type HistoryRecord, type DownloadVisualStatus } from "./features/downloads/uiTypes";
+import { getConsoleLineTone, readDownloadTelemetry } from "./features/downloads/consoleUtils";
+import { groupHistory } from "./features/history/historyUtils";
+import { ToastViewport } from "./components/ToastViewport";
+import { ChoiceCard } from "./components/ChoiceCard";
+import { PageHeader, InlineError, ReviewRow } from "./components/PagePrimitives";
+import { ToolBadge } from "./features/tools/ToolBadge";
+import { MediaCard } from "./features/search/MediaCard";
+import { VideoPreview } from "./features/search/VideoPreview";
 
 function App() {
   const [step, setStep] = useState(0);
@@ -719,7 +162,8 @@ function App() {
     platforms.find((item) => item.id === platform)?.urlExample ?? "https://exemplo.com/video";
   const selectedMedia = selectedResult !== null ? results[selectedResult] ?? null : null;
   const activeUrl = sourceMode === "search" ? selectedMedia?.url || "" : directUrl;
-  const searchAvailable = platform === "YouTube";
+  const spotify = platform === "Spotify";
+  const searchAvailable = platform === "YouTube" || spotify;
   const progress = (step / (steps.length - 1)) * 100;
   const mobileCurrentStatus = mobileDownloadState?.current?.status;
   const mobilePaused = isAndroidRuntime && (
@@ -757,11 +201,11 @@ function App() {
 
   const validStep = useMemo(() => {
     if (step === 0) return Boolean(platformFolder.trim());
-    if (step === 1) return Boolean(activeUrl.trim());
+    if (step === 1) return Boolean(activeUrl.trim()) && (!spotify || sourceMode === "search");
     if (step === 2) return Boolean(format);
     if (step === 3) return cookies !== "file" || Boolean(cookieFile.trim());
     return true;
-  }, [step, platformFolder, activeUrl, format, cookies, cookieFile]);
+  }, [step, platformFolder, activeUrl, format, cookies, cookieFile, spotify, sourceMode]);
 
   function applyMobileRecord(record: MobileDownloadRecord) {
     const isActive = ["queued", "running", "paused", "processing", "saving"].includes(record.status);
@@ -1207,14 +651,20 @@ function App() {
   }
 
   function choosePlatform(id: string) {
+    searchRequestRef.current += 1;
+    setSearching(false);
     setPlatform(id);
     setPlatformFolder(id === "Outro" ? "" : id);
+    if (id === "Spotify") {
+      setFormat("mp3");
+      setDownloadSubtitles(false);
+      setResults([]);
+      setSelectedResult(null);
+    }
     if (!supportsImageCover(id)) {
       setFormat((current) => current === "image" ? null : current);
     }
     if (id !== "YouTube") {
-      searchRequestRef.current += 1;
-      setSearching(false);
       setSourceMode("url");
       setPreviewMedia(null);
     }
@@ -1269,6 +719,29 @@ function App() {
     }
   }
 
+  async function importSpotifyTrack() {
+    if (searchInFlightRef.current || !directUrl.trim() || updatingTools.has("yt-dlp")) return;
+    const requestId = ++searchRequestRef.current;
+    searchInFlightRef.current = true;
+    setSearching(true);
+    setSearchError("");
+    setResults([]);
+    setSelectedResult(null);
+    try {
+      const title = await appInvoke<string>("spotify_track_query", { url: directUrl.trim() });
+      if (requestId !== searchRequestRef.current) return;
+      setSearchQuery(title);
+      setSourceMode("search");
+      const items = await appInvoke<SearchResult[]>("search_videos", { query: `${title} official audio` });
+      if (requestId === searchRequestRef.current) setResults(items);
+    } catch (error) {
+      if (requestId === searchRequestRef.current) setSearchError(errorText(error));
+    } finally {
+      searchInFlightRef.current = false;
+      if (requestId === searchRequestRef.current) setSearching(false);
+    }
+  }
+
   function chooseResult(item: SearchResult, index: number) {
     setSelectedResult(index);
   }
@@ -1294,6 +767,10 @@ function App() {
 
   async function startDownload() {
     if (!format || downloading || downloadInFlightRef.current) return;
+    if (spotify && (sourceMode !== "search" || !selectedMedia || !isAudio(format))) {
+      pushToast("info", "Escolha a faixa", "Importe o link, selecione um resultado do YouTube e escolha um formato de áudio.");
+      return;
+    }
     if (updateInFlightRef.current.size > 0 || updatingTools.size > 0) {
       pushToast(
         "info",
@@ -1471,7 +948,7 @@ function App() {
     if (!isImage(format)) parts.push("--add-metadata", "--concurrent-fragments 4");
     if (cookies === "file" && cookieFile) parts.push(`--cookies "${cookieFile}"`);
     else if (cookies !== "none") parts.push(`--cookies-from-browser ${cookies}`);
-    if (isAudio(format)) parts.push(`-x --audio-format ${format} --audio-quality 0`);
+    if (isAudio(format)) parts.push(`-f bestaudio/best -x --audio-format ${format} --audio-quality ${format === "mp3" ? "320K" : "0"}`);
     else if (isImage(format)) parts.push("--skip-download --write-thumbnail --ignore-no-formats-error");
     else {
       parts.push(`-f "${quality}" --merge-output-format ${format === "best" ? "mkv" : format}`);
@@ -1501,7 +978,7 @@ function App() {
           icon={Globe2}
         />
         <div className="card-grid platform-grid">
-          {platforms.map((item) => (
+          {platforms.filter((item) => !isAndroidRuntime || item.id !== "Spotify").map((item) => (
             <ChoiceCard
               key={item.id}
               active={platform === item.id}
@@ -1586,6 +1063,11 @@ function App() {
             transition={transition}
           />
         </div>
+        {spotify && (
+          <div className="source-search-note" role="note">
+            <AudioLines size={15} /> Spotify fornece apenas o nome da faixa. O áudio será de um resultado do YouTube escolhido por você, não do Spotify. Confira a versão e o artista; edite a pesquisa se necessário.
+          </div>
+        )}
         {!searchAvailable && (
           <div className="source-search-note" role="note">
             <Youtube size={15} />
@@ -1612,8 +1094,8 @@ function App() {
                     inputMode="url"
                     value={directUrl}
                     onChange={(event) => setDirectUrl(event.target.value)}
-                    onKeyDown={(event) => event.key === "Enter" && directUrl.trim() && goNext()}
-                    onDoubleClick={() => directUrl.trim() && setStep(2)}
+                    onKeyDown={(event) => event.key === "Enter" && directUrl.trim() && (spotify ? void importSpotifyTrack() : goNext())}
+                    onDoubleClick={() => !spotify && directUrl.trim() && setStep(2)}
                     placeholder={directUrlPlaceholder}
                   />
                   <button className="soft-button" onClick={pasteUrl} title="Colar URL">
@@ -1621,6 +1103,13 @@ function App() {
                   </button>
                 </div>
               </div>
+              {spotify && (
+                <button type="button" className="primary-button" onClick={importSpotifyTrack} disabled={!directUrl.trim() || searching || updatingTools.has("yt-dlp")}>
+                  {searching ? <LoaderCircle className="spin" size={18} /> : <Search size={18} />}
+                  {searching ? "Consultando faixa…" : "Importar faixa e buscar no YouTube"}
+                </button>
+              )}
+              {searchError && <InlineError message={searchError} />}
             </motion.div>
           ) : (
             <motion.div
@@ -1716,6 +1205,7 @@ function App() {
         />
         <div className="format-sections">
           {(["Vídeo", "Áudio", "Imagem", "Legenda"] as const)
+            .filter((category) => !spotify || category === "Áudio")
             .filter((category) => category !== "Imagem" || supportsImageCover(platform))
             .map((category) => (
             <section key={category}>
@@ -1813,7 +1303,11 @@ function App() {
                 </strong>
                 <small>
                   {audio
-                    ? "A conversão usará a melhor faixa disponível."
+                    ? format === "mp3"
+                      ? "Melhor faixa disponível → MP3 320 kbps. A qualidade final depende da fonte original."
+                      : format === "flac"
+                        ? "Melhor faixa disponível → FLAC sem novas perdas. Uma fonte com perdas não vira áudio lossless original; frequência e canais não são aumentados artificialmente."
+                        : "A conversão usará a melhor faixa disponível."
                     : "O arquivo original fornecido pela plataforma será preservado."}
                 </small>
               </div>
@@ -2589,67 +2083,6 @@ function App() {
       <ToastViewport items={toasts} />
     </div>
     </MotionConfig>
-  );
-}
-
-function PageHeader({
-  eyebrow,
-  title,
-  description,
-  icon: Icon,
-}: {
-  eyebrow: string;
-  title: React.ReactNode;
-  description: string;
-  icon: LucideIcon;
-}) {
-  return (
-    <header className="page-header">
-      <div className="eyebrow">
-        <span>
-          <Icon size={14} />
-        </span>
-        {eyebrow}
-      </div>
-      <h1>{title}</h1>
-      <p>{description}</p>
-    </header>
-  );
-}
-
-function InlineError({ message }: { message: string }) {
-  return (
-    <motion.div
-      className="inline-error"
-      role="alert"
-      initial={{ opacity: 0, y: -8 }}
-      animate={{ opacity: 1, y: 0 }}
-    >
-      <AlertCircle size={16} />
-      <span>{message}</span>
-    </motion.div>
-  );
-}
-
-function ReviewRow({
-  icon: Icon,
-  label,
-  value,
-}: {
-  icon: LucideIcon;
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="review-row">
-      <span>
-        <Icon size={16} />
-      </span>
-      <div>
-        <small>{label}</small>
-        <strong>{value}</strong>
-      </div>
-    </div>
   );
 }
 

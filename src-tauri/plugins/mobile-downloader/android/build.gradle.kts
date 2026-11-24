@@ -40,7 +40,7 @@ chaquopy {
     defaultConfig {
         version = "3.14"
         pip {
-            install("yt-dlp==2026.7.4")
+            install("yt-dlp==2026.8.19")
             install("yt-dlp-ejs==0.8.0")
         }
     }

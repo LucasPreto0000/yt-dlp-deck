@@ -1,13 +1,13 @@
 [package]
 name = "yt-dlp-deck"
-version = "1.1.14"
+version = "1.1.26"
 description = "Interface desktop para baixar mídia com yt-dlp"
 authors = ["YT-DLP Deck"]
 edition = "2021"
 
 [lib]
 name = "yt_dlp_deck_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -25,3 +25,6 @@ tokio = { version = "1", features = ["process", "fs", "io-util", "sync", "time"]
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21.1"

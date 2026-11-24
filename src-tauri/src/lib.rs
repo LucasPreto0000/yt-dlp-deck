@@ -1,3 +1,9 @@
+#[cfg(any(target_os = "android", test))]
+mod android_download;
+mod download;
+mod spotify;
+use download::{append_access_args, build_download_args, build_standalone_subtitle_args, is_auxiliary_format, supports_image_cover_url, safe_folder_name, add_youtube_hls_fallback, is_twitter_url, is_youtube_url, twitter_media_requires_login, youtube_download_was_forbidden, select_subtitle};
+
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -132,7 +138,7 @@ struct SearchResult {
 
 type SearchCache = Mutex<HashMap<String, (Instant, Vec<SearchResult>)>>;
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DownloadRequest {
     url: String,
@@ -1418,131 +1424,6 @@ async fn search_videos(app: AppHandle, query: String) -> Result<Vec<SearchResult
     Ok(results)
 }
 
-fn safe_folder_name(input: &str) -> Result<String, String> {
-    let value = input.trim();
-    if value.is_empty() || value == "." || value == ".." {
-        return Err("Escolha um nome válido para a pasta da plataforma.".to_owned());
-    }
-    let sanitized: String = value
-        .chars()
-        .map(|ch| match ch {
-            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
-            ch if ch.is_control() => '_',
-            _ => ch,
-        })
-        .collect();
-    let sanitized = sanitized.trim_end_matches([' ', '.']).to_owned();
-    if sanitized.is_empty() {
-        Err("Escolha um nome válido para a pasta da plataforma.".to_owned())
-    } else {
-        Ok(sanitized)
-    }
-}
-
-fn quality_selector(quality: Option<&str>) -> Option<&'static str> {
-    match quality {
-        Some("best") => Some("bv*+ba/b"),
-        Some("2160p60") => Some("bv*[height<=2160][fps>=60]+ba/bv*[height<=2160]+ba/b"),
-        Some("1440p60") => Some("bv*[height<=1440][fps>=60]+ba/bv*[height<=1440]+ba/b"),
-        Some("1080p60") => Some("bv*[height<=1080][fps>=60]+ba/bv*[height<=1080]+ba/b"),
-        Some("1080p") => Some("bv*[height<=1080]+ba/b"),
-        Some("720p") => Some("bv*[height<=720]+ba/b"),
-        Some("480p") => Some("bv*[height<=480]+ba/b"),
-        _ => None,
-    }
-}
-
-fn is_auxiliary_format(format: &str) -> bool {
-    matches!(format, "image" | "subtitle")
-}
-
-fn supports_image_cover_url(url: &str) -> bool {
-    reqwest::Url::parse(url).ok().is_some_and(|url| {
-        url.host_str().is_some_and(|host| {
-            let host = host.to_ascii_lowercase();
-            host == "tiktok.com"
-                || host.ends_with(".tiktok.com")
-                || host == "instagram.com"
-                || host.ends_with(".instagram.com")
-        })
-    })
-}
-
-fn safe_subtitle_language(language: &str) -> bool {
-    !language.is_empty()
-        && language.len() <= 64
-        && language != "live_chat"
-        && language
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-}
-
-fn subtitle_language_rank(language: &str) -> (u8, String) {
-    let normalized = language.to_ascii_lowercase();
-    let rank = if matches!(normalized.as_str(), "pt-br" | "pt_br") {
-        0
-    } else if normalized == "pt" {
-        1
-    } else if normalized.starts_with("pt-") || normalized.starts_with("pt_") {
-        2
-    } else if normalized == "en" {
-        3
-    } else if normalized.starts_with("en-") || normalized.starts_with("en_") {
-        4
-    } else {
-        5
-    };
-    (rank, normalized)
-}
-
-fn best_subtitle_language(collection: Option<&Value>) -> Option<String> {
-    let entries = collection?.as_object()?;
-    let mut languages = entries
-        .keys()
-        .filter(|language| safe_subtitle_language(language))
-        .cloned()
-        .collect::<Vec<_>>();
-    languages.sort_by_key(|language| subtitle_language_rank(language));
-    languages.into_iter().next()
-}
-
-fn select_subtitle(info: &Value) -> Option<SubtitleSelection> {
-    best_subtitle_language(info.get("subtitles"))
-        .map(|language| SubtitleSelection {
-            language,
-            automatic: false,
-        })
-        .or_else(|| {
-            best_subtitle_language(info.get("automatic_captions")).map(|language| {
-                SubtitleSelection {
-                    language,
-                    automatic: true,
-                }
-            })
-        })
-}
-
-fn append_access_args(args: &mut Vec<String>, request: &DownloadRequest, js_runtime: Option<&str>) {
-    if let Some(runtime) = js_runtime {
-        args.extend(["--js-runtimes".to_owned(), runtime.to_owned()]);
-    }
-    match request.cookies.as_str() {
-        "chrome" | "edge" | "firefox" => {
-            args.extend(["--cookies-from-browser".to_owned(), request.cookies.clone()]);
-        }
-        "file" => {
-            if let Some(path) = request
-                .cookie_file
-                .as_deref()
-                .filter(|path| !path.trim().is_empty())
-            {
-                args.extend(["--cookies".to_owned(), path.to_owned()]);
-            }
-        }
-        _ => {}
-    }
-}
-
 async fn probe_subtitle(
     executable: &Path,
     request: &DownloadRequest,
@@ -1569,93 +1450,49 @@ async fn probe_subtitle(
     })
 }
 
-fn build_download_args(
+async fn download_subtitle_with_retry(
+    app: &AppHandle,
+    executable: &Path,
     request: &DownloadRequest,
     output_template: &Path,
-    ffmpeg: Option<&Path>,
     js_runtime: Option<&str>,
-    subtitle: Option<&SubtitleSelection>,
-) -> Vec<String> {
-    let mut args = vec![
-        "--no-config".to_owned(),
-        "-o".to_owned(),
-        output_template.to_string_lossy().into_owned(),
-        "--no-playlist".to_owned(),
-        "--newline".to_owned(),
-        "--no-colors".to_owned(),
-        "--encoding".to_owned(),
-        "utf-8".to_owned(),
-        "--windows-filenames".to_owned(),
-        "--trim-filenames".to_owned(),
-        "180".to_owned(),
-    ];
-
-    if !is_auxiliary_format(&request.format) {
-        args.extend([
-            "--add-metadata".to_owned(),
-            "--concurrent-fragments".to_owned(),
-            "4".to_owned(),
-        ]);
-        if let Some(ffmpeg) = ffmpeg {
-            args.extend([
-                "--ffmpeg-location".to_owned(),
-                ffmpeg.to_string_lossy().into_owned(),
-            ]);
+    subtitle: &SubtitleSelection,
+) -> Result<(), String> {
+    let args = build_standalone_subtitle_args(request, output_template, js_runtime, subtitle);
+    let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    for attempt in 1..=2 {
+        let _ = app.emit(
+            "download-output",
+            format!("[legenda] Baixando arquivo de legenda (tentativa {attempt}/2)…"),
+        );
+        match command_output(executable, &refs, 120).await {
+            Ok(_) => {
+                let _ = app.emit(
+                    "download-output",
+                    "[legenda] Legenda salva ao lado da mídia.",
+                );
+                return Ok(());
+            }
+            Err(error) if attempt == 1 && error.contains("429") => {
+                let _ = app.emit(
+                    "download-output",
+                    "[legenda] O YouTube limitou temporariamente a legenda (HTTP 429); aguardando para tentar novamente…",
+                );
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+            Err(error) => return Err(error),
         }
     }
-    append_access_args(&mut args, request, js_runtime);
-
-    match request.format.as_str() {
-        "image" => args.extend([
-            "--skip-download".to_owned(),
-            "--write-thumbnail".to_owned(),
-            "--ignore-no-formats-error".to_owned(),
-        ]),
-        "subtitle" => args.extend([
-            "--skip-download".to_owned(),
-            "--ignore-no-formats-error".to_owned(),
-        ]),
-        "mp3" | "flac" | "wav" | "m4a" => args.extend([
-            "-x".to_owned(),
-            "--audio-format".to_owned(),
-            request.format.clone(),
-            "--audio-quality".to_owned(),
-            "0".to_owned(),
-        ]),
-        format => {
-            if let Some(selector) = quality_selector(request.quality.as_deref()) {
-                args.extend(["-f".to_owned(), selector.to_owned()]);
-            }
-            let container = if format == "best" { "mkv" } else { format };
-            if matches!(container, "mp4" | "mkv" | "webm") {
-                args.extend(["--merge-output-format".to_owned(), container.to_owned()]);
-            }
-        }
-    }
-    if request.subtitles || request.format == "subtitle" {
-        let selection = subtitle.expect("subtitle selection must be probed");
-        args.push(if selection.automatic {
-            "--write-auto-subs".to_owned()
-        } else {
-            "--write-subs".to_owned()
-        });
-        args.extend([
-            "--sub-langs".to_owned(),
-            selection.language.clone(),
-            "--sub-format".to_owned(),
-            "vtt/srt/best".to_owned(),
-        ]);
-    }
-    args.extend(["--".to_owned(), request.url.trim().to_owned()]);
-    args
+    unreachable!("the subtitle retry loop always returns")
 }
 
-async fn forward_process_output<R>(reader: R, app: AppHandle)
+async fn forward_process_output<R>(reader: R, app: AppHandle) -> Vec<String>
 where
     R: AsyncRead + Unpin,
 {
     let mut reader = BufReader::new(reader);
     let mut bytes = Vec::with_capacity(512);
+    let mut lines = Vec::new();
     loop {
         bytes.clear();
         match reader.read_until(b'\n', &mut bytes).await {
@@ -1663,7 +1500,8 @@ where
             Ok(_) => {
                 let line = decode_process_line(&bytes);
                 if !line.is_empty() {
-                    let _ = app.emit("download-output", line);
+                    let _ = app.emit("download-output", &line);
+                    lines.push(line);
                 }
             }
             Err(error) => {
@@ -1675,12 +1513,74 @@ where
             }
         }
     }
+    lines
 }
 
 fn decode_process_line(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes)
         .trim_end_matches(['\r', '\n'])
         .to_owned()
+}
+
+struct ProcessRun {
+    success: bool,
+    exit_code: i32,
+    output: String,
+}
+
+async fn run_yt_dlp_process(
+    app: &AppHandle,
+    executable: &Path,
+    args: &[String],
+) -> Result<ProcessRun, String> {
+    let mut command = Command::new(executable);
+    command
+        .args(args)
+        .env("PYTHONIOENCODING", "utf-8")
+        .env("PYTHONUTF8", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    hide_console(&mut command);
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("Não foi possível iniciar o yt-dlp: {e}"))?;
+    let stdout = child.stdout.take().ok_or("Saída do yt-dlp indisponível")?;
+    let stderr = child.stderr.take().ok_or("Erros do yt-dlp indisponíveis")?;
+    let stdout_task = tokio::spawn(forward_process_output(stdout, app.clone()));
+    let stderr_task = tokio::spawn(forward_process_output(stderr, app.clone()));
+    let exit = child
+        .wait()
+        .await
+        .map_err(|e| format!("Falha enquanto o yt-dlp estava executando: {e}"))?;
+    let stdout_lines = stdout_task.await.unwrap_or_default();
+    let stderr_lines = stderr_task.await.unwrap_or_default();
+    let output = stdout_lines
+        .iter()
+        .chain(stderr_lines.iter())
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(ProcessRun {
+        success: exit.success(),
+        exit_code: exit.code().unwrap_or(-1),
+        output,
+    })
+}
+
+fn download_failure_message(request: &DownloadRequest, exit_code: i32, output: &str) -> String {
+    if is_twitter_url(&request.url) && twitter_media_requires_login(output) {
+        return if request.cookies == "none" {
+            "Este vídeo do X/Twitter exige uma sessão autenticada para liberar conteúdo sensível. Volte para Ajustes > Cookies e autenticação, escolha o navegador em que sua conta do X está conectada e tente novamente."
+                .to_owned()
+        } else {
+            "O X/Twitter recusou o acesso ao vídeo com os cookies selecionados. Entre na sua conta do X nesse navegador, confirme que deseja ver conteúdo sensível e tente novamente."
+                .to_owned()
+        };
+    }
+    format!(
+        "O yt-dlp terminou com erro (código {exit_code}). Consulte o log exibido no aplicativo."
+    )
 }
 
 #[tauri::command]
@@ -1737,57 +1637,62 @@ async fn start_download(
     };
     let js_runtime = javascript_runtime(&app);
     let subtitle = if request.subtitles || request.format == "subtitle" {
-        let selection = probe_subtitle(&executable, &request, js_runtime.as_deref()).await?;
-        let detail = if selection.automatic {
-            format!(
-                "[legenda] Nenhuma legenda do autor encontrada; usando legenda automática/traduzida: {}.",
-                selection.language
-            )
-        } else {
-            format!(
-                "[legenda] Legenda do autor selecionada: {}.",
-                selection.language
-            )
-        };
-        let _ = app.emit("download-output", detail);
-        Some(selection)
+        match probe_subtitle(&executable, &request, js_runtime.as_deref()).await {
+            Ok(selection) => {
+                let detail = if selection.automatic {
+                    format!(
+                        "[legenda] Nenhuma legenda do autor encontrada; usando legenda automática/traduzida: {}.",
+                        selection.language
+                    )
+                } else {
+                    format!(
+                        "[legenda] Legenda do autor selecionada: {}.",
+                        selection.language
+                    )
+                };
+                let _ = app.emit("download-output", detail);
+                Some(selection)
+            }
+            Err(_) if request.format != "subtitle" => {
+                let _ = app.emit(
+                    "download-output",
+                    "AVISO: Não foi possível preparar a legenda; a mídia continuará normalmente.",
+                );
+                None
+            }
+            Err(error) => return Err(error),
+        }
     } else {
         None
     };
+    let mut media_request = request.clone();
+    if request.subtitles && !auxiliary {
+        media_request.subtitles = false;
+    }
     let args = build_download_args(
-        &request,
+        &media_request,
         &output_template,
         ffmpeg.as_deref(),
         js_runtime.as_deref(),
-        subtitle.as_ref(),
+        if media_request.subtitles {
+            subtitle.as_ref()
+        } else {
+            None
+        },
     );
 
-    let mut command = Command::new(executable);
-    command
-        .args(&args)
-        .env("PYTHONIOENCODING", "utf-8")
-        .env("PYTHONUTF8", "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    hide_console(&mut command);
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("Não foi possível iniciar o yt-dlp: {e}"))?;
-    let stdout = child.stdout.take().ok_or("Saída do yt-dlp indisponível")?;
-    let stderr = child.stderr.take().ok_or("Erros do yt-dlp indisponíveis")?;
-    let out_app = app.clone();
-    let err_app = app.clone();
-
-    let stdout_task = tokio::spawn(forward_process_output(stdout, out_app));
-    let stderr_task = tokio::spawn(forward_process_output(stderr, err_app));
-
-    let exit = child
-        .wait()
-        .await
-        .map_err(|e| format!("Falha enquanto o yt-dlp estava executando: {e}"))?;
-    let _ = stdout_task.await;
-    let _ = stderr_task.await;
+    let mut process = run_yt_dlp_process(&app, &executable, &args).await?;
+    if !process.success
+        && is_youtube_url(&request.url)
+        && youtube_download_was_forbidden(&process.output)
+    {
+        let _ = app.emit(
+            "download-output",
+            "[sistema] O YouTube recusou o formato direto (HTTP 403). Tentando novamente pela transmissão HLS…",
+        );
+        let retry_args = add_youtube_hls_fallback(&args, &request);
+        process = run_yt_dlp_process(&app, &executable, &retry_args).await?;
+    }
     let output_dir_text = output_dir.to_string_lossy().into_owned();
 
     let history_dir = app
@@ -1810,11 +1715,45 @@ async fn start_download(
         let _ = history.write_all(history_line.as_bytes());
     }
 
-    if exit.success() {
+    if process.success {
+        let subtitle_error = if request.subtitles && !auxiliary {
+            match subtitle.as_ref() {
+                Some(selection) => download_subtitle_with_retry(
+                    &app,
+                    &executable,
+                    &request,
+                    &output_template,
+                    js_runtime.as_deref(),
+                    selection,
+                )
+                .await
+                .err(),
+                None => Some("Nenhuma legenda disponível.".to_owned()),
+            }
+        } else {
+            None
+        };
+        if let Some(error) = &subtitle_error {
+            let detail = if error.contains("429") {
+                "O YouTube limitou temporariamente a legenda (HTTP 429). A mídia foi salva normalmente; tente a legenda novamente mais tarde."
+            } else {
+                "A mídia foi salva normalmente, mas a legenda não pôde ser baixada. Consulte o aviso no console."
+            };
+            let _ = app.emit("download-output", format!("AVISO: {detail}"));
+        }
         let message = match request.format.as_str() {
             "image" => "Imagem de capa salva com sucesso.",
             "subtitle" => "Legenda salva com sucesso.",
-            _ if request.subtitles => "Download e legenda salvos com sucesso.",
+            _ if request.subtitles && subtitle_error.is_none() => {
+                "Download e legenda salvos com sucesso."
+            }
+            _ if subtitle_error
+                .as_ref()
+                .is_some_and(|error| error.contains("429")) =>
+            {
+                "Mídia salva. A legenda foi temporariamente limitada pelo YouTube (HTTP 429)."
+            }
+            _ if request.subtitles => "Mídia salva, mas a legenda não pôde ser baixada.",
             _ => "Download concluído com sucesso.",
         };
         Ok(DownloadResult {
@@ -1823,9 +1762,10 @@ async fn start_download(
             message: message.to_owned(),
         })
     } else {
-        Err(format!(
-            "O yt-dlp terminou com erro (código {}). Consulte o log exibido no aplicativo.",
-            exit.code().unwrap_or(-1)
+        Err(download_failure_message(
+            &request,
+            process.exit_code,
+            &process.output,
         ))
     }
 }
@@ -1905,6 +1845,7 @@ pub fn run() {
             update_yt_dlp,
             update_ffmpeg,
             search_videos,
+            spotify::spotify_track_query,
             start_download,
             open_downloads_folder,
             open_external_url
@@ -1914,248 +1855,4 @@ pub fn run() {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_release_ffmpeg_version() {
-        let output = "ffmpeg version 8.1.2-essentials_build-www.gyan.dev Copyright";
-        assert_eq!(
-            parse_ffmpeg_version(output).as_deref(),
-            Some("8.1.2-essentials_build-www.gyan.dev")
-        );
-        assert!(ffmpeg_release_matches(
-            "8.1.2-essentials_build-www.gyan.dev",
-            "8.1.2"
-        ));
-    }
-
-    #[test]
-    fn parses_latest_version_from_yt_dlp_updater_output() {
-        let output = "\
-Current version: stable@2026.06.30 from yt-dlp/yt-dlp
-Latest version: stable@2026.07.04 from yt-dlp/yt-dlp
-Updated yt-dlp to stable@2026.07.04.";
-        assert_eq!(
-            parse_yt_dlp_update_version(output).as_deref(),
-            Some("2026.07.04")
-        );
-        assert!(valid_yt_dlp_version("2026.07.04"));
-        assert!(!valid_yt_dlp_version("2026.07.04."));
-        assert!(!valid_yt_dlp_version("latest"));
-    }
-
-    #[test]
-    fn recognizes_ffmpeg_git_builds() {
-        assert!(is_ffmpeg_git_build("2026-07-09-git-8de8405796"));
-        assert!(is_ffmpeg_git_build("N-123456-gabc123"));
-        assert!(!is_ffmpeg_git_build("8.1.2-essentials_build-www.gyan.dev"));
-        assert_eq!(
-            git_build_date("2026-07-27-git-a757b708ae-essentials_build"),
-            Some("2026-07-27")
-        );
-        let git_source = ffmpeg_update_source("2026-07-27-git-a757b708ae").unwrap();
-        assert!(git_source.git_build);
-        assert!(git_source.seven_zip);
-        assert_eq!(git_source.archive_extension, "7z");
-        let release_source = ffmpeg_update_source("8.1.2-essentials_build").unwrap();
-        assert!(!release_source.git_build);
-        assert!(release_source.seven_zip);
-        assert_eq!(release_source.archive_extension, "7z");
-        assert!(ffmpeg_update_source("N-123456-gabc123").is_none());
-        assert!(local_release_is_newer("9.0-full_build", "8.1.2"));
-        assert!(!local_release_is_newer("7.1.1", "8.1.2"));
-    }
-
-    #[test]
-    fn ffmpeg_install_can_rollback_and_commit() {
-        let unique = format!(
-            "yt-dlp-deck-transaction-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        );
-        let root = std::env::temp_dir().join(unique);
-        let staging = root.join("staging");
-        std::fs::create_dir_all(&staging).unwrap();
-        for name in ffmpeg_tool_names() {
-            std::fs::write(root.join(name), format!("old-{name}")).unwrap();
-            std::fs::write(staging.join(name), format!("new-{name}")).unwrap();
-        }
-
-        begin_ffmpeg_install(&staging, &root).unwrap();
-        assert!(root.join(FFMPEG_TRANSACTION_FILE).is_file());
-        assert_eq!(
-            std::fs::read(root.join("ffmpeg.exe")).unwrap(),
-            b"new-ffmpeg.exe"
-        );
-        recover_ffmpeg_transaction(&root).unwrap();
-        assert_eq!(
-            std::fs::read(root.join("ffmpeg.exe")).unwrap(),
-            b"old-ffmpeg.exe"
-        );
-        assert_eq!(
-            std::fs::read(root.join("ffprobe.exe")).unwrap(),
-            b"old-ffprobe.exe"
-        );
-
-        begin_ffmpeg_install(&staging, &root).unwrap();
-        commit_ffmpeg_install(&root).unwrap();
-        assert_eq!(
-            std::fs::read(root.join("ffmpeg.exe")).unwrap(),
-            b"new-ffmpeg.exe"
-        );
-        assert_eq!(
-            std::fs::read(root.join("ffprobe.exe")).unwrap(),
-            b"new-ffprobe.exe"
-        );
-        assert!(!root.join(FFMPEG_TRANSACTION_FILE).exists());
-        assert!(!ffmpeg_backup_path(&root, "ffmpeg.exe").exists());
-
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn process_output_tolerates_windows_1252_bytes() {
-        let decoded = decode_process_line(&[b'T', 0x96, b'X', b'\r', b'\n']);
-        assert!(decoded.starts_with('T'));
-        assert!(decoded.ends_with('X'));
-    }
-
-    #[test]
-    fn download_url_is_placed_after_argument_separator() {
-        let request = DownloadRequest {
-            url: "--exec=calc.exe".to_owned(),
-            platform_folder: "YouTube".to_owned(),
-            format: "mp3".to_owned(),
-            subtitles: false,
-            quality: Some("best".to_owned()),
-            cookies: "none".to_owned(),
-            cookie_file: None,
-        };
-        let args = build_download_args(
-            &request,
-            Path::new("output.%(ext)s"),
-            Some(Path::new("ffmpeg.exe")),
-            Some("node:C:\\Program Files\\nodejs\\node.exe"),
-            None,
-        );
-        let separator = args
-            .iter()
-            .position(|argument| argument == "--")
-            .expect("separador de argumentos ausente");
-        assert_eq!(separator, args.len() - 2);
-        assert_eq!(args.last().map(String::as_str), Some("--exec=calc.exe"));
-        assert!(!args[..separator]
-            .iter()
-            .any(|argument| argument == "--exec=calc.exe"));
-        assert!(args
-            .iter()
-            .any(|argument| argument == "--windows-filenames"));
-        assert!(args.iter().any(|argument| argument.starts_with("node:")));
-    }
-
-    fn auxiliary_request(format: &str) -> DownloadRequest {
-        DownloadRequest {
-            url: "https://www.instagram.com/reel/example/".to_owned(),
-            platform_folder: "Instagram".to_owned(),
-            format: format.to_owned(),
-            subtitles: false,
-            quality: None,
-            cookies: "none".to_owned(),
-            cookie_file: None,
-        }
-    }
-
-    #[test]
-    fn image_download_writes_only_the_thumbnail() {
-        let request = auxiliary_request("image");
-        let args = build_download_args(&request, Path::new("output.%(ext)s"), None, None, None);
-        assert!(args.iter().any(|argument| argument == "--write-thumbnail"));
-        assert!(args.iter().any(|argument| argument == "--skip-download"));
-        assert!(!args.iter().any(|argument| argument == "-f"));
-        assert!(!args.iter().any(|argument| argument == "--ffmpeg-location"));
-    }
-
-    #[test]
-    fn subtitle_download_uses_the_exact_selected_source() {
-        let request = auxiliary_request("subtitle");
-        let manual = SubtitleSelection {
-            language: "pt-BR".to_owned(),
-            automatic: false,
-        };
-        let args = build_download_args(
-            &request,
-            Path::new("output.%(ext)s"),
-            None,
-            None,
-            Some(&manual),
-        );
-        assert!(args.iter().any(|argument| argument == "--write-subs"));
-        assert!(!args.iter().any(|argument| argument == "--write-auto-subs"));
-        assert!(args.windows(2).any(|pair| pair == ["--sub-langs", "pt-BR"]));
-    }
-
-    #[test]
-    fn subtitle_can_be_downloaded_alongside_mp4() {
-        let mut request = auxiliary_request("mp4");
-        request.subtitles = true;
-        request.quality = Some("1080p".to_owned());
-        let automatic = SubtitleSelection {
-            language: "pt-BR".to_owned(),
-            automatic: true,
-        };
-        let args = build_download_args(
-            &request,
-            Path::new("output.%(ext)s"),
-            Some(Path::new("ffmpeg.exe")),
-            None,
-            Some(&automatic),
-        );
-        assert!(args
-            .iter()
-            .any(|argument| argument == "--merge-output-format"));
-        assert!(args.iter().any(|argument| argument == "--write-auto-subs"));
-        assert!(args.windows(2).any(|pair| pair == ["--sub-langs", "pt-BR"]));
-    }
-
-    #[test]
-    fn subtitle_selection_prefers_author_then_portuguese_automatic() {
-        let manual = serde_json::json!({
-            "subtitles": {"en": [{}]},
-            "automatic_captions": {"pt-BR": [{}]}
-        });
-        assert_eq!(
-            select_subtitle(&manual),
-            Some(SubtitleSelection {
-                language: "en".to_owned(),
-                automatic: false,
-            })
-        );
-
-        let automatic = serde_json::json!({
-            "subtitles": {},
-            "automatic_captions": {"en": [{}], "pt-BR": [{}]}
-        });
-        assert_eq!(
-            select_subtitle(&automatic),
-            Some(SubtitleSelection {
-                language: "pt-BR".to_owned(),
-                automatic: true,
-            })
-        );
-    }
-
-    #[test]
-    fn image_cover_hosts_are_restricted() {
-        assert!(supports_image_cover_url(
-            "https://www.tiktok.com/@a/video/1"
-        ));
-        assert!(supports_image_cover_url("https://instagram.com/reel/a"));
-        assert!(!supports_image_cover_url(
-            "https://example.com/instagram.com"
-        ));
-    }
-}
+mod tests;

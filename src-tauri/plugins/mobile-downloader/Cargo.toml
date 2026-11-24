@@ -5,7 +5,7 @@ authors = [ "YT-DLP Deck" ]
 description = ""
 edition = "2021"
 rust-version = "1.77.2"
-exclude = ["/examples", "/dist-js", "/guest-js", "/node_modules"]
+exclude = ["/examples", "/dist-js", "/guest-js", "/node_modules", "/android/build", "/android/.gradle", "/android/.cxx"]
 links = "tauri-plugin-mobile-downloader"
 
 [dependencies]

@@ -1,8 +1,54 @@
 param(
-    [switch]$Bundle
+    [switch]$Bundle,
+    [switch]$RepairCache
 )
 
 $ErrorActionPreference = "Stop"
+
+function Get-FileSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $hashAlgorithm = [Security.Cryptography.SHA256]::Create()
+    $stream = [IO.File]::OpenRead($Path)
+    try {
+        return [Convert]::ToBase64String($hashAlgorithm.ComputeHash($stream))
+    } finally {
+        $stream.Dispose()
+        $hashAlgorithm.Dispose()
+    }
+}
+
+function Copy-IfChanged {
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$Destination
+    )
+    $sourceItem = Get-Item -LiteralPath $Source
+    $destinationItem = Get-Item -LiteralPath $Destination -ErrorAction SilentlyContinue
+    if ($destinationItem -and $sourceItem.Length -eq $destinationItem.Length -and
+        (Get-FileSha256 -Path $Source) -eq
+        (Get-FileSha256 -Path $Destination)) {
+        return
+    }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Destination) | Out-Null
+    Copy-Item -LiteralPath $Source -Destination $Destination -Force
+}
+
+function Assert-QuickJsPackaged {
+    param(
+        [Parameter(Mandatory = $true)][string]$ArchivePath,
+        [Parameter(Mandatory = $true)][string]$EntryPath
+    )
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($ArchivePath)
+    try {
+        $entry = $archive.Entries | Where-Object FullName -EQ $EntryPath | Select-Object -First 1
+        if (!$entry -or $entry.Length -lt 100KB) {
+            throw "O pacote Android não contém um runtime QuickJS ARM64 válido em $EntryPath."
+        }
+    } finally {
+        $archive.Dispose()
+    }
+}
 
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $tauriRoot = Join-Path $projectRoot "src-tauri"
@@ -22,6 +68,7 @@ $ndkRoot = if ($env:NDK_HOME) {
 $configuredJdk = $env:JAVA_HOME
 $jdkCandidates = @(
     $configuredJdk
+    (Join-Path $tauriRoot "target\jdk17-build")
     (Get-ChildItem -LiteralPath "C:\Program Files\Eclipse Adoptium" -Directory -ErrorAction SilentlyContinue |
         Where-Object Name -Like "jdk-17*" |
         Sort-Object Name -Descending |
@@ -151,17 +198,38 @@ try {
     if (!(Test-Path -LiteralPath $androidIconSource)) {
         throw "Os recursos do ícone Android não foram encontrados."
     }
-    Copy-Item -Path (Join-Path $androidIconSource "*") `
-        -Destination $androidResourceDestination -Recurse -Force
+    Get-ChildItem -LiteralPath $androidIconSource -Recurse -File | ForEach-Object {
+        $relativePath = $_.FullName.Substring($androidIconSource.Length).TrimStart('\', '/')
+        Copy-IfChanged -Source $_.FullName `
+            -Destination (Join-Path $androidResourceDestination $relativePath)
+    }
 
     $generatedManifestFile = Join-Path $androidRoot "app\src\main\AndroidManifest.xml"
     $generatedManifest = Get-Content -Raw -LiteralPath $generatedManifestFile
-    if ($generatedManifest -notmatch 'android:roundIcon=') {
-        $updatedGeneratedManifest = $generatedManifest -replace (
+    $updatedGeneratedManifest = $generatedManifest
+    if ($updatedGeneratedManifest -notmatch 'android:roundIcon=') {
+        $updatedGeneratedManifest = $updatedGeneratedManifest -replace (
             'android:icon="@mipmap/ic_launcher"'
         ), "android:icon=`"@mipmap/ic_launcher`"`r`n        android:roundIcon=`"@mipmap/ic_launcher_round`""
+    }
+    if ($updatedGeneratedManifest -notmatch 'android:extractNativeLibs=') {
+        $updatedGeneratedManifest = $updatedGeneratedManifest -replace (
+            'android:allowBackup="false"'
+        ), "android:allowBackup=`"false`"`r`n        android:extractNativeLibs=`"true`""
+    }
+    if ($updatedGeneratedManifest -ne $generatedManifest) {
         Set-Content -LiteralPath $generatedManifestFile `
             -Value $updatedGeneratedManifest -Encoding utf8
+    }
+
+    $generatedAppBuildFile = Join-Path $androidRoot "app\build.gradle.kts"
+    $generatedAppBuild = Get-Content -Raw -LiteralPath $generatedAppBuildFile
+    if ($generatedAppBuild -notmatch 'jniLibs\.useLegacyPackaging\s*=\s*true') {
+        $updatedGeneratedAppBuild = $generatedAppBuild -replace (
+            '    buildTypes \{'
+        ), "    packaging {`r`n        jniLibs.useLegacyPackaging = true`r`n    }`r`n    buildTypes {"
+        Set-Content -LiteralPath $generatedAppBuildFile `
+            -Value $updatedGeneratedAppBuild -Encoding utf8
     }
 
     $verificationSource = Join-Path $tauriRoot "android\verification-metadata.xml"
@@ -169,40 +237,69 @@ try {
     if (!(Test-Path -LiteralPath $verificationSource)) {
         throw "O catálogo SHA-256 das dependências Android não foi encontrado."
     }
-    New-Item -ItemType Directory -Force -Path $verificationDirectory | Out-Null
-    Copy-Item -LiteralPath $verificationSource `
-        -Destination (Join-Path $verificationDirectory "verification-metadata.xml") -Force
+    Copy-IfChanged -Source $verificationSource `
+        -Destination (Join-Path $verificationDirectory "verification-metadata.xml")
 
-    & npm run tauri android build -- --apk --target aarch64
-    $tauriExit = $LASTEXITCODE
-
-    $rustLibrary = Join-Path $tauriRoot "target\aarch64-linux-android\release\libyt_dlp_deck_lib.so"
-    if (!(Test-Path -LiteralPath $rustLibrary)) {
-        throw "A biblioteca Rust para Android não foi gerada (código Tauri: $tauriExit)."
-    }
-
-    $jniDirectory = Join-Path $androidRoot "app\src\main\jniLibs\arm64-v8a"
-    New-Item -ItemType Directory -Force -Path $jniDirectory | Out-Null
-    $resolvedAndroid = (Resolve-Path -LiteralPath $androidRoot).Path
-    $resolvedJni = (Resolve-Path -LiteralPath $jniDirectory).Path
-    if (!$resolvedJni.StartsWith($resolvedAndroid, [StringComparison]::OrdinalIgnoreCase)) {
-        throw "O destino JNI calculado está fora do projeto Android."
-    }
-    $jniLibrary = Join-Path $resolvedJni "libyt_dlp_deck_lib.so"
-    $existingJniLibrary = Get-Item -LiteralPath $jniLibrary -Force -ErrorAction SilentlyContinue
-    if (!$existingJniLibrary -or !$existingJniLibrary.LinkType) {
-        Copy-Item -LiteralPath $rustLibrary -Destination $jniLibrary -Force
-    }
-
-    Push-Location $androidRoot
-    try {
-        $gradleTask = if ($Bundle) { ":app:bundleArm64Release" } else { ":app:assembleArm64Release" }
-        & .\gradlew.bat $gradleTask -x rustBuildArm64Release
-        if ($LASTEXITCODE -ne 0) {
-            throw "O Gradle não conseguiu montar o pacote Android."
+    $gradlePropertiesFile = Join-Path $androidRoot "gradle.properties"
+    $gradleProperties = Get-Content -Raw -LiteralPath $gradlePropertiesFile
+    $updatedGradleProperties = $gradleProperties
+    foreach ($setting in @("org.gradle.caching=true", "org.gradle.parallel=true")) {
+        $key = $setting.Split('=')[0]
+        if ($updatedGradleProperties -notmatch "(?m)^$([regex]::Escape($key))=") {
+            $updatedGradleProperties = $updatedGradleProperties.TrimEnd() + "`r`n$setting`r`n"
+        } else {
+            $updatedGradleProperties = [regex]::Replace(
+                $updatedGradleProperties,
+                "(?m)^$([regex]::Escape($key))=.*$",
+                $setting
+            )
         }
-    } finally {
-        Pop-Location
+    }
+    if ($updatedGradleProperties -ne $gradleProperties) {
+        Set-Content -LiteralPath $gradlePropertiesFile `
+            -Value $updatedGradleProperties -NoNewline -Encoding utf8
+    }
+
+    # Repair caches only when explicitly requested. Moving Gradle's build directory
+    # on every run forces Chaquopy to reinstall Python packages from scratch.
+    if ($RepairCache) {
+        $pluginAndroidBuild = Join-Path $tauriRoot "plugins\mobile-downloader\android\build"
+        $staleBuildRoot = Join-Path $tauriRoot "target\stale-gradle"
+        New-Item -ItemType Directory -Force -Path $staleBuildRoot | Out-Null
+        if (Test-Path -LiteralPath $pluginAndroidBuild) {
+            $staleBuild = Join-Path $staleBuildRoot (
+                "plugin-build-" + [DateTime]::UtcNow.ToString("yyyyMMddHHmmssfff")
+            )
+            [IO.Directory]::Move($pluginAndroidBuild, $staleBuild)
+        }
+        $blockedGeneratedDirectory = Join-Path $androidRoot "sandbox-readonly"
+        if (Test-Path -LiteralPath $blockedGeneratedDirectory) {
+            $blockedGeneratedBackup = Join-Path $staleBuildRoot (
+                "sandbox-readonly-" + [DateTime]::UtcNow.ToString("yyyyMMddHHmmssfff")
+            )
+            try {
+                [IO.Directory]::Move($blockedGeneratedDirectory, $blockedGeneratedBackup)
+            } catch [IO.IOException] {
+                $generatedBackup = Join-Path $staleBuildRoot (
+                    "generated-android-" + [DateTime]::UtcNow.ToString("yyyyMMddHHmmssfff")
+                )
+                [IO.Directory]::Move($androidRoot, $generatedBackup)
+                New-Item -ItemType Directory -Force -Path $androidRoot | Out-Null
+                & robocopy.exe $generatedBackup $androidRoot /E `
+                    /XD "sandbox-readonly" /NFL /NDL /NJH /NJS /NP | Out-Null
+                if ($LASTEXITCODE -ge 8 -and
+                    !(Test-Path -LiteralPath (Join-Path $androidRoot "app\build.gradle.kts"))) {
+                    throw "Não foi possível reconstruir o projeto Android sem o cache bloqueado."
+                }
+            }
+        }
+    }
+
+    $packageFlag = if ($Bundle) { "--aab" } else { "--apk" }
+    & npm run tauri android build -- $packageFlag --split-per-abi --target aarch64
+    $tauriExit = $LASTEXITCODE
+    if ($tauriExit -ne 0) {
+        throw "A compilação Android falhou (código Tauri: $tauriExit)."
     }
 
     $buildTools = (
@@ -273,7 +370,7 @@ KeyPassword=$keyPassword
     New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
     if ($Bundle) {
         $unsignedBundle = (
-            Get-ChildItem -Recurse -LiteralPath (Join-Path $androidRoot "app\build\outputs\bundle") -Filter "*.aab" |
+            Get-ChildItem -Recurse -LiteralPath (Join-Path $androidRoot "app\build\outputs\bundle") -Filter "*arm64*.aab" |
                 Sort-Object LastWriteTime -Descending |
                 Select-Object -First 1
         ).FullName
@@ -292,12 +389,14 @@ KeyPassword=$keyPassword
         if ($LASTEXITCODE -ne 0) {
             throw "A assinatura do Android App Bundle não passou na verificação."
         }
+        Assert-QuickJsPackaged -ArchivePath $finalBundle `
+            -EntryPath "base/lib/arm64-v8a/libqjs.so"
         Write-Output ""
         Write-Output "AAB Android gerado com assinatura de ${signatureLabel}:"
         Write-Output $finalBundle
     } else {
         $unsignedApk = (
-            Get-ChildItem -Recurse -LiteralPath (Join-Path $androidRoot "app\build\outputs\apk") -Filter "*release-unsigned.apk" |
+            Get-ChildItem -Recurse -LiteralPath (Join-Path $androidRoot "app\build\outputs\apk") -Filter "*arm64*release-unsigned.apk" |
                 Sort-Object LastWriteTime -Descending |
                 Select-Object -First 1
         ).FullName
@@ -329,6 +428,8 @@ KeyPassword=$keyPassword
         if ($LASTEXITCODE -ne 0) {
             throw "A assinatura do APK não passou na verificação."
         }
+        Assert-QuickJsPackaged -ArchivePath $finalApk `
+            -EntryPath "lib/arm64-v8a/libqjs.so"
         Write-Output ""
         Write-Output "APK Android gerado com assinatura de ${signatureLabel}:"
         Write-Output $finalApk

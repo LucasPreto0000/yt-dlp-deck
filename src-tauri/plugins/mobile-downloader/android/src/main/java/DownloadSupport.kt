@@ -4,7 +4,6 @@ import android.content.Context
 import android.net.Uri
 import org.json.JSONArray
 import org.json.JSONObject
-import java.util.concurrent.atomic.AtomicBoolean
 
 internal class DownloadCancelledException : RuntimeException("Download cancelado pelo usuário.")
 
@@ -170,63 +169,38 @@ internal class DownloadStore private constructor(context: Context) {
     }
 }
 
+/** JVM entry points used by the foreground service and yt-dlp callbacks. */
 internal object DownloadRuntime {
-    private val paused = AtomicBoolean(false)
-    private val cancelled = AtomicBoolean(false)
+    init {
+        System.loadLibrary("yt_dlp_deck_lib")
+    }
 
-    @Volatile
-    var activeId: String? = null
-        private set
+    val activeId: String? get() = nativeActiveId()
 
-    @Synchronized
     fun begin(id: String) {
-        check(activeId == null) { "Já existe um download em andamento." }
-        activeId = id
-        paused.set(false)
-        cancelled.set(false)
+        check(nativeBegin(id)) { "Já existe um download em andamento." }
     }
 
-    @Synchronized
-    fun pause(): Boolean {
-        if (activeId == null || cancelled.get()) return false
-        paused.set(true)
-        return true
-    }
-
-    @Synchronized
-    fun resume(): Boolean {
-        if (activeId == null || cancelled.get()) return false
-        paused.set(false)
-        return true
-    }
-
-    @Synchronized
-    fun cancel(): Boolean {
-        if (activeId == null) return false
-        cancelled.set(true)
-        paused.set(false)
-        return true
-    }
-
-    fun isPaused(): Boolean = paused.get()
-
-    fun isCancelled(): Boolean = cancelled.get()
+    fun pause() = nativePause()
+    fun resume() = nativeResume()
+    fun cancel() = nativeCancel()
+    fun isPaused() = nativeIsPaused()
+    fun isCancelled() = nativeIsCancelled()
+    fun finish(id: String) = nativeFinish(id)
 
     fun checkpoint() {
-        while (paused.get() && !cancelled.get()) {
-            Thread.sleep(180)
-        }
-        if (cancelled.get()) throw DownloadCancelledException()
+        if (!nativeCheckpoint()) throw DownloadCancelledException()
     }
 
-    @Synchronized
-    fun finish(id: String) {
-        if (activeId == id) {
-            activeId = null
-            paused.set(false)
-            cancelled.set(false)
-        }
-    }
+    private external fun nativeActiveId(): String?
+    private external fun nativeBegin(id: String): Boolean
+    private external fun nativePause(): Boolean
+    private external fun nativeResume(): Boolean
+    private external fun nativeCancel(): Boolean
+    private external fun nativeIsPaused(): Boolean
+    private external fun nativeIsCancelled(): Boolean
+    private external fun nativeFinish(id: String)
+    private external fun nativeCheckpoint(): Boolean
 }
 
 internal fun deleteStoredUri(context: Context, value: String?): Boolean {

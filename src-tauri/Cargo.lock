@@ -4696,9 +4696,10 @@ dependencies = [
 
 [[package]]
 name = "yt-dlp-deck"
-version = "1.1.14"
+version = "1.1.26"
 dependencies = [
  "futures-util",
+ "jni",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
