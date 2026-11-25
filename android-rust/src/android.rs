@@ -538,17 +538,27 @@ fn download(
     transfer: &crate::web::transfer::Transfer,
 ) -> Result<String, String> {
     let url = url::Url::parse(input).map_err(|error| error.to_string())?;
-    let client = reqwest::blocking::Client::builder()
-        .https_only(true)
-        .connect_timeout(Duration::from_secs(8))
-        .timeout(Duration::from_secs(300))
-        .build()
-        .map_err(|error| error.to_string())?;
-    let mut response = client
-        .get(url)
-        .send()
-        .and_then(|r| r.error_for_status())
-        .map_err(|e| e.without_url().to_string())?;
+    let cover = format == "image";
+    let (mut response, source_name) = if crate::tiktok::is_page(&url) {
+        if !matches!(format, "mp4" | "best" | "image") {
+            return Err("Use MP4 ou Melhor para o vídeo do TikTok, ou Imagem para baixar a capa.".into());
+        }
+        let (response, name) = crate::tiktok::open(url, cover, transfer)?;
+        (response, Some(name))
+    } else {
+        let client = reqwest::blocking::Client::builder()
+            .https_only(true)
+            .connect_timeout(Duration::from_secs(8))
+            .timeout(Duration::from_secs(300))
+            .build()
+            .map_err(|error| error.to_string())?;
+        let response = client
+            .get(url)
+            .send()
+            .and_then(|r| r.error_for_status())
+            .map_err(|e| e.without_url().to_string())?;
+        (response, None)
+    };
     let mime = response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
@@ -564,9 +574,14 @@ fn download(
         "audio/flac" | "audio/x-flac" => "flac",
         "audio/wav" | "audio/x-wav" => "wav",
         "audio/mp4" | "audio/x-m4a" => "m4a",
+        "image/jpeg" if cover => "jpg",
+        "image/png" if cover => "png",
+        "image/webp" if cover => "webp",
+        "image/avif" if cover => "avif",
+        _ if cover => return Err("O link não retornou uma imagem compatível.".into()),
         _ => return Err("O servidor não retornou um arquivo de mídia compatível. Use um link HTTPS direto do arquivo.".into()),
     };
-    if format != "best" && format != extension {
+    if (cover && !mime.starts_with("image/")) || (!cover && format != "best" && format != extension) {
         return Err(format!("A fonte fornece {extension}, mas você selecionou {format}. Escolha o formato original ou Melhor."));
     }
     let name = response
@@ -582,7 +597,9 @@ fn download(
         .collect::<String>();
     let name = format!(
         "{}.{extension}",
-        if name.trim().is_empty() {
+        if let Some(source_name) = source_name.as_deref() {
+            source_name
+        } else if name.trim().is_empty() {
             "Download"
         } else {
             name.trim()

@@ -152,6 +152,14 @@ const PLATFORMS: &[Choice] = &[
     },
 ];
 
+const COVER_FORMAT: Choice = Choice {
+    id: "image",
+    title: "Imagem (capa)",
+    detail: "Capa original do vídeo",
+    icon: "image-down",
+    color: "#ff9f68",
+};
+
 const FORMATS: &[(&str, Choice)] = &[
     (
         "Vídeo",
@@ -371,7 +379,10 @@ impl Flow {
                         .collect();
                     groups.push_str(&format!(r#"<section><div class="section-label">{} {category}</div><div class="card-grid format-grid">{cards}</div></section>"#, icon(glyph, 15)));
                 }
-                if matches!(self.platform.as_str(), "TikTok" | "Instagram") {
+                if self.platform == "TikTok" {
+                    let card = choice(&COVER_FORMAT, self.format == "image", "format", "Imagem");
+                    groups.push_str(&format!(r#"<section><div class="section-label">{} Imagem</div><div class="card-grid format-grid">{card}</div></section>"#, icon("image-down", 15)));
+                } else if self.platform == "Instagram" {
                     groups.push_str(&screens::extra_format(
                         "Imagem",
                         "Imagem (capa)",
@@ -405,8 +416,10 @@ impl Flow {
                     .iter()
                     .find(|(_, item)| item.id == self.format)
                     .map(|(_, item)| item.title)
-                    .unwrap_or("—");
-                let detail = if matches!(self.format.as_str(), "mp3" | "flac" | "wav" | "m4a") {
+                    .unwrap_or(if self.format == "image" { COVER_FORMAT.title } else { "—" });
+                let detail = if self.format == "image" {
+                    "Imagem original"
+                } else if matches!(self.format.as_str(), "mp3" | "flac" | "wav" | "m4a") {
                     "Melhor faixa de áudio"
                 } else {
                     QUALITIES
@@ -600,7 +613,8 @@ impl Flow {
             }
         } else if let Some(f) = fields
             .get("format")
-            .filter(|f| self.step == 2 && FORMATS.iter().any(|(_, item)| item.id == f.as_ref()))
+            .filter(|f| self.step == 2 && (FORMATS.iter().any(|(_, item)| item.id == f.as_ref())
+                || (self.platform == "TikTok" && f.as_ref() == COVER_FORMAT.id)))
         {
             self.format = f.to_string();
         } else if let Some(quality) = fields.get("quality").filter(|quality| {
@@ -915,6 +929,23 @@ mod tests {
             assert!(responses.2.contains("@font-face"));
             assert!(responses.2.contains(".platform-grid"));
         });
+    }
+
+    #[test]
+    fn tiktok_shows_the_link_without_a_single_tab_and_accepts_cover() {
+        let mut flow = Flow::default();
+        let actions = Arc::new(|_: &str, _: &str, _: &str| Ok(String::new()));
+        flow.submit(b"platform=TikTok", &actions);
+        flow.submit(b"action=next", &actions);
+        let html = screens::source(&flow);
+        assert!(html.contains("direct-media-url"));
+        assert!(html.contains("Links encurtados"));
+        assert!(!html.contains("role=\"tablist\""));
+        flow.submit(b"action=next&url=https%3A%2F%2Fvt.tiktok.com%2Fabc%2F", &actions);
+        flow.submit(b"format=image", &actions);
+        assert_eq!(flow.format, "image");
+        flow.platform = "YouTube".into();
+        assert!(screens::source(&flow).contains("Pesquisar vídeo"));
     }
 
     #[test]

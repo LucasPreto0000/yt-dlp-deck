@@ -157,7 +157,6 @@ pub(super) fn source(flow: &Flow) -> String {
     let search = flow.search && search_available;
     let direct = if search { "" } else { "is-active" };
     let search_class = if search { "is-active" } else { "" };
-    let tabs = if search_available { "" } else { "is-single" };
     let position = if search { "100%" } else { "0" };
     let search_button = if search_available {
         format!(
@@ -166,15 +165,6 @@ pub(super) fn source(flow: &Flow) -> String {
         )
     } else {
         String::new()
-    };
-    let note = if search_available {
-        String::new()
-    } else {
-        format!(
-            r#"<div class="source-search-note" role="note">{} A pesquisa por nome usa o YouTube. Para {}, use um link direto.</div>"#,
-            icon("youtube", 15),
-            esc(&flow.platform)
-        )
     };
     let panel = if search {
         let results = if flow.results.is_empty() {
@@ -213,16 +203,25 @@ pub(super) fn source(flow: &Flow) -> String {
             _ => "https://exemplo.com/video",
         };
         format!(
-            r#"<div id="source-url-panel" role="tabpanel" class="source-area"><div class="field-panel hero-input"><label for="direct-media-url">{} URL da mídia</label>
+            r#"<div id="source-url-panel" {role} class="source-area"><div class="field-panel hero-input"><label for="direct-media-url">{} URL da mídia</label>
           <div class="input-actions"><input id="direct-media-url" name="url" type="url" inputmode="url" placeholder="{example}" value="{}" required>
           <button class="soft-button" name="action" value="clipboard" formnovalidate>{} Colar</button></div></div></div>"#,
             icon("link-2", 15),
             esc(&flow.url),
-            icon("clipboard", 17)
+            icon("clipboard", 17),
+            role = if search_available { r#"role="tabpanel""# } else { "" }
         )
     };
-    format!(r#"{}<div class="source-tabs {tabs}" role="tablist" aria-label="Forma de escolher o conteúdo"><button name="action" value="tab-direct" formnovalidate class="{direct}" role="tab" aria-selected="{}">{} Link direto</button>
-      {search_button}<span class="tab-indicator" style="transform:translateX({position})"></span></div>{note}{panel}"#,
+    if !search_available {
+        let description = if flow.platform == "TikTok" {
+            "Cole o link de um vídeo público do TikTok. Links encurtados também funcionam."
+        } else {
+            "Cole um link HTTPS que aponte diretamente para o arquivo de mídia."
+        };
+        return format!("{}{panel}", header("Passo 02 · conteúdo", "Cole o <em>link da mídia.</em>", description, "link-2"));
+    }
+    format!(r#"{}<div class="source-tabs" role="tablist" aria-label="Forma de escolher o conteúdo"><button name="action" value="tab-direct" formnovalidate class="{direct}" role="tab" aria-selected="{}">{} Link direto</button>
+      {search_button}<span class="tab-indicator" style="transform:translateX({position})"></span></div>{panel}"#,
       header("Passo 02 · conteúdo", "Encontre exatamente o que você <em>quer baixar.</em>", "Cole um link direto ou pesquise pelo nome. Na pesquisa, cada resultado aparece com sua capa para você escolher com segurança.", "wand-sparkles"),
       !search, icon("link-2", 16))
 }

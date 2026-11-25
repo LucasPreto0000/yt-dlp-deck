@@ -6,3 +6,5 @@ mod android;
 mod backdrop;
 #[cfg(any(target_os = "android", test))]
 mod search;
+#[cfg(any(target_os = "android", test))]
+mod tiktok;

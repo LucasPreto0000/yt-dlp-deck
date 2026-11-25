@@ -122,6 +122,11 @@ impl Transfer {
         self.locked().total = total;
     }
 
+    #[cfg(target_os = "android")]
+    pub fn log(&self, line: &str) {
+        self.locked().lines.push(line.into());
+    }
+
     pub fn received(&self, count: usize) {
         let mut state = self.locked();
         state.received += count as u64;

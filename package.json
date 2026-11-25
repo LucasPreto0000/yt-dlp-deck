@@ -19,6 +19,7 @@
     "desktop:build": "node scripts/build-artifact.mjs desktop:build",
     "android:init": "tauri android init",
     "android:dev": "tauri android dev",
+    "android:rust:build": "pwsh -NoProfile -File scripts/build-android-rust.ps1",
     "android:build": "node scripts/build-artifact.mjs android:build",
     "android:bundle": "node scripts/build-artifact.mjs android:bundle"
   },
